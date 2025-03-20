@@ -203,7 +203,7 @@ compare_performance()
 
 ## 文档
 
-详细文档请参见[API参考文档](docs/api_reference.md)。
+详细文档请参见[API参考文档](https://github.com/Durian-leader/autotau/blob/main/docs/api_reference.md)。
 
 ## 贡献代码
 
