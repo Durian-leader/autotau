@@ -14,7 +14,23 @@ AutoTau是一个用于自动拟合信号中指数上升/下降过程时间常数
 
 ## 安装
 
+### 从PyPI安装（即将上线）
+
 ```bash
+pip install autotau
+```
+
+### 从GitHub安装
+
+```bash
+pip install git+https://github.com/Durian-Leader/autotau.git
+```
+
+### 从源码安装
+
+```bash
+git clone https://github.com/Durian-Leader/autotau.git
+cd autotau
 pip install -e .
 ```
 
@@ -185,6 +201,14 @@ compare_performance()
 - pandas
 - tqdm
 
+## 文档
+
+详细文档请参见[API参考文档](docs/api_reference.md)。
+
+## 贡献代码
+
+欢迎提交Pull Request或创建Issue。
+
 ## 协议
 
-MIT
+[MIT](LICENSE)
