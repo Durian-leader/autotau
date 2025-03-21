@@ -14,7 +14,7 @@ AutoTau是一个用于自动拟合信号中指数上升/下降过程时间常数
 
 ## 安装
 
-### 从PyPI安装（即将上线）
+### 从PyPI安装
 
 ```bash
 pip install autotau
