@@ -489,6 +489,8 @@ class ParallelCyclesAutoTauFitter:
                         tau_fitter.tau_on_pcov = cycle_auto_fitter.best_tau_on_fitter.tau_on_pcov
                         tau_fitter.tau_on_r_squared = new_r_squared_on
                         tau_fitter.tau_on_r_squared_adj = cycle_auto_fitter.best_tau_on_fitter.tau_on_r_squared_adj
+                        # 重要：更新窗口索引以匹配新的拟合窗口
+                        tau_fitter.t_on_idx = cycle_auto_fitter.best_tau_on_fitter.t_on_idx
                         refit_info['new_r_squared_on'] = new_r_squared_on
                     else:
                         refit_info['new_r_squared_on'] = r_squared_on
@@ -502,6 +504,8 @@ class ParallelCyclesAutoTauFitter:
                         tau_fitter.tau_off_pcov = cycle_auto_fitter.best_tau_off_fitter.tau_off_pcov
                         tau_fitter.tau_off_r_squared = new_r_squared_off
                         tau_fitter.tau_off_r_squared_adj = cycle_auto_fitter.best_tau_off_fitter.tau_off_r_squared_adj
+                        # 重要：更新窗口索引以匹配新的拟合窗口
+                        tau_fitter.t_off_idx = cycle_auto_fitter.best_tau_off_fitter.t_off_idx
                         refit_info['new_r_squared_off'] = new_r_squared_off
                     else:
                         refit_info['new_r_squared_off'] = r_squared_off
