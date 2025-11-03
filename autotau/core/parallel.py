@@ -787,6 +787,14 @@ class ParallelCyclesAutoTauFitter:
             ax2.plot(cycles, tau_off_values, 'o-', label=self.text[self.language]['tau_off'], color='red')
             ax2.tick_params(axis='y', labelcolor='red')
             ax2.grid(False)
+
+            # 对齐网格
+            y1_min, y1_max = ax1.get_ylim()
+            y2_min, y2_max = ax2.get_ylim()
+            y1_ticks = ax1.get_yticks()
+            y2_ticks = (y1_ticks - y1_min) / (y1_max - y1_min) * (y2_max - y2_min) + y2_min
+            ax2.set_yticks(y2_ticks)
+
             fig.tight_layout() 
         else:
             ax1.plot(cycles, tau_off_values, 'o-', label=self.text[self.language]['tau_off'], color='red')
