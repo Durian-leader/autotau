@@ -359,6 +359,8 @@ class ParallelCyclesAutoTauFitter:
                 'refitted': ' [已重新拟合]',
                 'cycle_off_fit': '周期{} - 关闭拟合 (τ = {:.5f} s, R² = {:.3f})',
                 'fit_results_for_cycles': '周期{}-{}的拟合结果',
+                'tau_on_y_label': 'Tau On (s)',
+                'tau_off_y_label': 'Tau Off (s)'
             },
             'en': {
                 'no_results': 'No cycle results available. Please run fit_all_cycles() first.',
@@ -392,6 +394,8 @@ class ParallelCyclesAutoTauFitter:
                 'refitted': ' [Refitted]',
                 'cycle_off_fit': 'Cycle {} - Off Fit (τ = {:.5f} s, R² = {:.3f})',
                 'fit_results_for_cycles': 'Fit Results for Cycles {}-{}',
+                'tau_on_y_label': 'Tau On (s)',
+                'tau_off_y_label': 'Tau Off (s)'
             }
         }
     
@@ -745,7 +749,7 @@ class ParallelCyclesAutoTauFitter:
 
         return pd.DataFrame(self.refitted_cycles)
 
-    def plot_cycle_results(self, figsize=(10, 6)):
+    def plot_cycle_results(self, figsize=(10, 6), dual_y_axis=True):
         """
         绘制所有周期的tau值
         
@@ -753,6 +757,8 @@ class ParallelCyclesAutoTauFitter:
         -----
         figsize : tuple, optional
             图形大小(宽度, 高度)，单位为英寸
+        dual_y_axis : bool, optional
+            是否使用双y轴, 默认为True
         """
         if not self.cycle_results:
             print(self.text[self.language]['no_results'])
@@ -762,28 +768,38 @@ class ParallelCyclesAutoTauFitter:
         tau_on_values = [res['tau_on'] for res in self.cycle_results]
         tau_off_values = [res['tau_off'] for res in self.cycle_results]
 
-        # 查找重新拟合的周期
         refitted_indices = [i for i, res in enumerate(self.cycle_results) if res.get('was_refitted', False)]
         refitted_cycles = [cycles[i] for i in refitted_indices]
         refitted_tau_on = [tau_on_values[i] for i in refitted_indices]
         refitted_tau_off = [tau_off_values[i] for i in refitted_indices]
 
-        plt.figure(figsize=figsize)
-        # 绘制所有周期
-        plt.plot(cycles, tau_on_values, 'o-', label=self.text[self.language]['tau_on'], color='blue')
-        plt.plot(cycles, tau_off_values, 'o-', label=self.text[self.language]['tau_off'], color='red')
+        fig, ax1 = plt.subplots(figsize=figsize)
 
-        # 突出显示重新拟合的周期
+        ax1.set_xlabel(self.text[self.language]['cycle'])
+        ax1.set_ylabel(self.text[self.language]['tau_on_y_label'], color='blue')
+        ax1.plot(cycles, tau_on_values, 'o-', label=self.text[self.language]['tau_on'], color='blue')
+        ax1.tick_params(axis='y', labelcolor='blue')
+
+        if dual_y_axis:
+            ax2 = ax1.twinx()
+            ax2.set_ylabel(self.text[self.language]['tau_off_y_label'], color='red')
+            ax2.plot(cycles, tau_off_values, 'o-', label=self.text[self.language]['tau_off'], color='red')
+            ax2.tick_params(axis='y', labelcolor='red')
+            fig.tight_layout() 
+        else:
+            ax1.plot(cycles, tau_off_values, 'o-', label=self.text[self.language]['tau_off'], color='red')
+            ax1.set_ylabel(self.text[self.language]['tau_s'])
+
         if refitted_cycles:
-            plt.scatter(refitted_cycles, refitted_tau_on, s=100, facecolors='none', edgecolors='blue',
-                        linewidth=2, label=self.text[self.language]['refitted_tau_on'])
-            plt.scatter(refitted_cycles, refitted_tau_off, s=100, facecolors='none', edgecolors='red',
-                        linewidth=2, label=self.text[self.language]['refitted_tau_off'])
+            if dual_y_axis:
+                ax1.scatter(refitted_cycles, refitted_tau_on, s=100, facecolors='none', edgecolors='blue', linewidth=2, label=self.text[self.language]['refitted_tau_on'])
+                ax2.scatter(refitted_cycles, refitted_tau_off, s=100, facecolors='none', edgecolors='red', linewidth=2, label=self.text[self.language]['refitted_tau_off'])
+            else:
+                ax1.scatter(refitted_cycles, refitted_tau_on, s=100, facecolors='none', edgecolors='blue', linewidth=2, label=self.text[self.language]['refitted_tau_on'])
+                ax1.scatter(refitted_cycles, refitted_tau_off, s=100, facecolors='none', edgecolors='red', linewidth=2, label=self.text[self.language]['refitted_tau_off'])
 
-        plt.xlabel(self.text[self.language]['cycle'])
-        plt.ylabel(self.text[self.language]['tau_s'])
         plt.title(self.text[self.language]['tau_values_per_cycle'])
-        plt.legend()
+        fig.legend(loc="upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
         plt.grid(True)
         plt.show()
 
