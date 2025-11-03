@@ -841,7 +841,7 @@ class ParallelCyclesAutoTauFitter:
     def _plot_cycle_windows(self, cycle_index, include_in_legend=False):
         """
         在信号图上为指定周期绘制开启和关闭窗口
-        
+
         参数:
         -----
         cycle_index : int
@@ -849,15 +849,23 @@ class ParallelCyclesAutoTauFitter:
         include_in_legend : bool, optional
             是否将此周期的窗口包含在图例中
         """
-        cycle_start_time = self.time[0] + cycle_index * self.period
-        
-        # 计算窗口时间
-        on_window_start = cycle_start_time + self.window_on_offset
-        on_window_end = on_window_start + self.window_on_size
-        
-        off_window_start = cycle_start_time + self.window_off_offset
-        off_window_end = off_window_start + self.window_off_size
-        
+        # 如果已经运行了 fit_all_cycles，从 cycle_results 中读取实际使用的窗口
+        # 这样可以正确显示重新拟合后的窗口位置
+        if self.cycle_results and cycle_index < len(self.cycle_results):
+            result = self.cycle_results[cycle_index]
+            fitter = result['fitter']
+            on_window_start = fitter.t_on_idx[0]
+            on_window_end = fitter.t_on_idx[1]
+            off_window_start = fitter.t_off_idx[0]
+            off_window_end = fitter.t_off_idx[1]
+        else:
+            # 否则使用初始窗口参数
+            cycle_start_time = self.time[0] + cycle_index * self.period
+            on_window_start = cycle_start_time + self.window_on_offset
+            on_window_end = on_window_start + self.window_on_size
+            off_window_start = cycle_start_time + self.window_off_offset
+            off_window_end = off_window_start + self.window_off_size
+
         # 绘制窗口
         if include_in_legend:
             plt.axvspan(on_window_start, on_window_end, alpha=0.2, color='green', label=f'周期{cycle_index+1} 开启窗口')

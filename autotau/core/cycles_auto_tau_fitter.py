@@ -601,7 +601,7 @@ class CyclesAutoTauFitter:
     def _plot_cycle_windows(self, cycle_index, include_in_legend=False):
         """
         绘制特定周期窗口的辅助方法
-        
+
         参数:
         -----
         cycle_index : int
@@ -609,15 +609,22 @@ class CyclesAutoTauFitter:
         include_in_legend : bool
             是否将此周期的窗口包含在图例中
         """
-        cycle_start_time = self.time[0] + cycle_index * self.period
-
-        # 开启窗口
-        on_window_start = cycle_start_time + self.window_on_offset
-        on_window_end = on_window_start + self.window_on_size
-
-        # 关闭窗口
-        off_window_start = cycle_start_time + self.window_off_offset
-        off_window_end = off_window_start + self.window_off_size
+        # 如果已经运行了 fit_all_cycles，从 cycle_results 中读取实际使用的窗口
+        # 这样可以正确显示重新拟合后的窗口位置
+        if self.cycle_results and cycle_index < len(self.cycle_results):
+            result = self.cycle_results[cycle_index]
+            fitter = result['fitter']
+            on_window_start = fitter.t_on_idx[0]
+            on_window_end = fitter.t_on_idx[1]
+            off_window_start = fitter.t_off_idx[0]
+            off_window_end = fitter.t_off_idx[1]
+        else:
+            # 否则使用初始窗口参数
+            cycle_start_time = self.time[0] + cycle_index * self.period
+            on_window_start = cycle_start_time + self.window_on_offset
+            on_window_end = on_window_start + self.window_on_size
+            off_window_start = cycle_start_time + self.window_off_offset
+            off_window_end = off_window_start + self.window_off_size
 
         # 突出显示开启窗口
         plt.axvspan(on_window_start, on_window_end, alpha=0.2, color='green',
