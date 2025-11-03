@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\n发布 v0.2.0：修复窗口标注错位问题\n\n修复内容：\n- 修复 CyclesAutoTauFitter 和 ParallelCyclesAutoTauFitter 中的窗口偏移量计算\n- 通过取模操作确保偏移量在单个周期范围内，解决窗口区间标注半个周期错位的bug\n- 更新版本号至 0.2.0\n\n修改文件：\n- autotau/core/cycles_auto_tau_fitter.py\n- autotau/core/parallel.py\n- autotau/__init__.py\n- setup.py\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

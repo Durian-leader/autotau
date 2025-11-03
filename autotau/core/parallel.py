@@ -358,9 +358,9 @@ class ParallelCyclesAutoTauFitter:
         
         auto_fitter.fit_tau_on_and_off(interp=interp, points_after_interp=points_after_interp)
 
-        # 存储最佳窗口参数
-        self.window_on_offset = auto_fitter.best_tau_on_window_start_time - self.time[0]
-        self.window_off_offset = auto_fitter.best_tau_off_window_start_time - self.time[0]
+        # 存储最佳窗口参数（取模确保偏移量在单个周期范围内）
+        self.window_on_offset = (auto_fitter.best_tau_on_window_start_time - self.time[0]) % self.period
+        self.window_off_offset = (auto_fitter.best_tau_off_window_start_time - self.time[0]) % self.period
         self.window_on_size = auto_fitter.best_tau_on_window_size
         self.window_off_size = auto_fitter.best_tau_off_window_size
         self.initial_auto_fitter = auto_fitter
