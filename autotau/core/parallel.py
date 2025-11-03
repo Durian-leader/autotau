@@ -779,12 +779,14 @@ class ParallelCyclesAutoTauFitter:
         ax1.set_ylabel(self.text[self.language]['tau_on_y_label'], color='blue')
         ax1.plot(cycles, tau_on_values, 'o-', label=self.text[self.language]['tau_on'], color='blue')
         ax1.tick_params(axis='y', labelcolor='blue')
+        ax1.grid(True)
 
         if dual_y_axis:
             ax2 = ax1.twinx()
             ax2.set_ylabel(self.text[self.language]['tau_off_y_label'], color='red')
             ax2.plot(cycles, tau_off_values, 'o-', label=self.text[self.language]['tau_off'], color='red')
             ax2.tick_params(axis='y', labelcolor='red')
+            ax2.grid(False)
             fig.tight_layout() 
         else:
             ax1.plot(cycles, tau_off_values, 'o-', label=self.text[self.language]['tau_off'], color='red')
@@ -799,8 +801,13 @@ class ParallelCyclesAutoTauFitter:
                 ax1.scatter(refitted_cycles, refitted_tau_off, s=100, facecolors='none', edgecolors='red', linewidth=2, label=self.text[self.language]['refitted_tau_off'])
 
         plt.title(self.text[self.language]['tau_values_per_cycle'])
-        fig.legend(loc="upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
-        plt.grid(True)
+        lines, labels = ax1.get_legend_handles_labels()
+        if dual_y_axis:
+            lines2, labels2 = ax2.get_legend_handles_labels()
+            lines += lines2
+            labels += labels2
+        ax1.legend(lines, labels, loc='best')
+        
         plt.show()
 
     def plot_r_squared_values(self, figsize=(10, 6)):
