@@ -396,26 +396,19 @@ class CyclesAutoTauFitter:
         ax1.set_ylabel(self.text[self.language]['tau_on_y_label'], color='blue')
         ax1.plot(cycles, tau_on_values, 'o-', label=self.text[self.language]['tau_on'], color='blue')
         ax1.tick_params(axis='y', labelcolor='blue')
-        ax1.grid(True)
+        ax1.grid(axis='x') # 仅显示垂直网格线
 
         if dual_y_axis:
             ax2 = ax1.twinx()
             ax2.set_ylabel(self.text[self.language]['tau_off_y_label'], color='red')
             ax2.plot(cycles, tau_off_values, 'o-', label=self.text[self.language]['tau_off'], color='red')
             ax2.tick_params(axis='y', labelcolor='red')
-            ax2.grid(False) # 仅在ax1上显示网格
-
-            # 对齐网格
-            y1_min, y1_max = ax1.get_ylim()
-            y2_min, y2_max = ax2.get_ylim()
-            y1_ticks = ax1.get_yticks()
-            y2_ticks = (y1_ticks - y1_min) / (y1_max - y1_min) * (y2_max - y2_min) + y2_min
-            ax2.set_yticks(y2_ticks)
-            
-            fig.tight_layout()
+            ax2.grid(False) # 不显示ax2的网格
+            fig.tight_layout() 
         else:
             ax1.plot(cycles, tau_off_values, 'o-', label=self.text[self.language]['tau_off'], color='red')
             ax1.set_ylabel(self.text[self.language]['tau_s'])
+            ax1.grid(True) # 单y轴时显示完整网格
 
         if refitted_cycles:
             if dual_y_axis:
