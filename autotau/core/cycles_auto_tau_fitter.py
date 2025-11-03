@@ -7,14 +7,18 @@ from .auto_tau_fitter import AutoTauFitter
 class CyclesAutoTauFitter:
     """
     自动拟合多个周期信号的tau值
-    
+
     该类使用AutoTauFitter找到前两个周期的最佳拟合窗口，然后根据周期长度将这些窗口应用于后续周期。
+
+    v0.3.0 新增特性：
+    - 支持自定义 AutoTauFitter 工厂函数（灵活配置并行策略）
+    - 默认使用串行 AutoTauFitter（适合上层框架调用）
     """
 
-    def __init__(self, time, signal, period, sample_rate, **kwargs):
+    def __init__(self, time, signal, period, sample_rate, fitter_factory=None, **kwargs):
         """
         初始化CyclesAutoTauFitter类
-        
+
         参数:
         -----
         time : array-like
@@ -25,6 +29,21 @@ class CyclesAutoTauFitter:
             信号周期(s)
         sample_rate : float
             采样率(Hz)
+        fitter_factory : callable, optional
+            ✨ v0.3.0 新增：AutoTauFitter 工厂函数
+            用于创建 AutoTauFitter 实例，支持自定义配置（如并行执行）
+            - None: 使用默认工厂（串行执行，适合 features_v2 调用）
+            - callable: 自定义工厂函数，返回配置好的 AutoTauFitter 实例
+            示例：
+                # 使用并行 AutoTauFitter
+                from concurrent.futures import ProcessPoolExecutor
+                executor = ProcessPoolExecutor(max_workers=8)
+                fitter_factory = lambda time, signal, **kw: AutoTauFitter(
+                    time, signal, executor=executor, **kw
+                )
+                cycles_fitter = CyclesAutoTauFitter(
+                    ..., fitter_factory=fitter_factory
+                )
         **kwargs :
             传递给AutoTauFitter的额外参数，如:
             window_scalar_min : float, optional
@@ -48,6 +67,7 @@ class CyclesAutoTauFitter:
         self.sample_rate = sample_rate
         self.auto_tau_fitter_params = kwargs
         self.language = kwargs.get('language', 'en')
+        self.fitter_factory = fitter_factory  # ✨ 新增：工厂函数
 
         # 结果存储
         self.cycle_results = []
@@ -146,17 +166,46 @@ class CyclesAutoTauFitter:
             }
         }
 
+    def _default_fitter_factory(self, time, signal, **kwargs):
+        """
+        默认的 AutoTauFitter 工厂函数（串行执行）
+
+        参数:
+        -----
+        time : array-like
+            时间数据
+        signal : array-like
+            信号数据
+        **kwargs :
+            传递给 AutoTauFitter 的参数
+
+        返回:
+        -----
+        AutoTauFitter
+            配置好的 AutoTauFitter 实例（串行模式）
+        """
+        return AutoTauFitter(
+            time,
+            signal,
+            sample_step=1/self.sample_rate,
+            period=self.period,
+            executor=None,  # 默认串行
+            **kwargs
+        )
+
     def find_best_windows(self, interp=True, points_after_interp=100):
         """
         使用前两个周期找到开启和关闭过程的最佳窗口
-        
+
+        v0.3.0 更新：使用 fitter_factory 创建 AutoTauFitter
+
         参数:
         -----
         interp : bool, optional
             是否在拟合过程中使用插值(默认: True)
         points_after_interp : int, optional
             插值后的点数(默认: 100)
-            
+
         返回:
         -----
         AutoTauFitter
@@ -167,12 +216,11 @@ class CyclesAutoTauFitter:
         time_subset = self.time[two_period_mask]
         signal_subset = self.signal[two_period_mask]
 
-        # 对前两个周期使用AutoTauFitter
-        auto_fitter = AutoTauFitter(
+        # ✨ 使用 factory 创建 AutoTauFitter（支持自定义配置）
+        factory = self.fitter_factory if self.fitter_factory else self._default_fitter_factory
+        auto_fitter = factory(
             time_subset,
             signal_subset,
-            sample_step=1/self.sample_rate,
-            period=self.period,
             **self.auto_tau_fitter_params
         )
         auto_fitter.fit_tau_on_and_off(interp=interp, points_after_interp=points_after_interp)

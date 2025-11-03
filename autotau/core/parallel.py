@@ -3,6 +3,7 @@ import concurrent.futures
 import multiprocessing
 import pandas as pd
 from tqdm import tqdm
+import warnings
 from .tau_fitter import TauFitter
 from .auto_tau_fitter import AutoTauFitter
 import matplotlib.pyplot as plt
@@ -10,15 +11,38 @@ import matplotlib.pyplot as plt
 class ParallelAutoTauFitter:
     """
     AutoTauFitter的并行版本，使用多进程加速窗口搜索
-    
+
+    ⚠️ DEPRECATED (v0.3.0): 此类已被废弃
+    ----------------------------------------
+    请改用 AutoTauFitter(..., executor=ProcessPoolExecutor(max_workers=N))
+
+    废弃原因：
+    - 硬编码的并行策略导致嵌套并行问题
+    - 无法与上层框架（如 features_v2）的并行策略协调
+    - 新架构支持更灵活的并行配置
+
+    迁移示例：
+        # 旧代码（废弃）
+        from autotau import ParallelAutoTauFitter
+        fitter = ParallelAutoTauFitter(..., max_workers=8)
+
+        # 新代码（推荐）
+        from autotau import AutoTauFitter
+        from concurrent.futures import ProcessPoolExecutor
+        with ProcessPoolExecutor(max_workers=8) as executor:
+            fitter = AutoTauFitter(..., executor=executor)
+            result = fitter.fit_tau_on_and_off()
+
     利用多核CPU并行处理不同窗口大小和位置的拟合任务，大幅提升滑动窗口搜索速度
     """
-    
-    def __init__(self, time, signal, sample_step, period, window_scalar_min=1/5, window_scalar_max=1/3, 
-                 window_points_step=10, window_start_idx_step=1, normalize=False, language='en', 
+
+    def __init__(self, time, signal, sample_step, period, window_scalar_min=1/5, window_scalar_max=1/3,
+                 window_points_step=10, window_start_idx_step=1, normalize=False, language='en',
                  show_progress=False, max_workers=None):
         """
         初始化并行版AutoTauFitter
+
+        ⚠️ DEPRECATED: 请改用 AutoTauFitter(..., executor=ProcessPoolExecutor(...))
         
         参数:
         -----
@@ -47,6 +71,27 @@ class ParallelAutoTauFitter:
         max_workers : int, optional
             最大工作进程数，默认为None，表示使用系统CPU核心数
         """
+        # ⚠️ 发出废弃警告
+        warnings.warn(
+            "\n"
+            "=" * 70 + "\n"
+            "⚠️  ParallelAutoTauFitter 已被废弃 (v0.3.0)\n"
+            "=" * 70 + "\n"
+            "请改用灵活的新 API：\n\n"
+            "  from autotau import AutoTauFitter\n"
+            "  from concurrent.futures import ProcessPoolExecutor\n\n"
+            "  with ProcessPoolExecutor(max_workers=8) as executor:\n"
+            "      fitter = AutoTauFitter(..., executor=executor)\n"
+            "      result = fitter.fit_tau_on_and_off()\n\n"
+            "新架构优势：\n"
+            "  ✓ 避免嵌套并行问题\n"
+            "  ✓ 与 features_v2 等上层框架完美集成\n"
+            "  ✓ 更灵活的并行策略控制\n"
+            "=" * 70,
+            DeprecationWarning,
+            stacklevel=2
+        )
+
         self.time = np.array(time)
         self.signal = np.array(signal)
         self.sample_step = sample_step
@@ -275,14 +320,44 @@ class ParallelAutoTauFitter:
 class ParallelCyclesAutoTauFitter:
     """
     CyclesAutoTauFitter的并行版本，使用多进程加速多个周期的处理
-    
+
+    ⚠️ DEPRECATED (v0.3.0): 此类已被废弃
+    ----------------------------------------
+    请改用 CyclesAutoTauFitter(..., fitter_factory=...)
+
+    废弃原因：
+    - 硬编码的并行策略导致嵌套并行问题
+    - 无法与上层框架（如 features_v2）的并行策略协调
+    - 新架构支持更灵活的并行配置
+
+    迁移示例：
+        # 旧代码（废弃）
+        from autotau import ParallelCyclesAutoTauFitter
+        fitter = ParallelCyclesAutoTauFitter(..., max_workers=8)
+
+        # 新代码（推荐 - 默认串行）
+        from autotau import CyclesAutoTauFitter
+        fitter = CyclesAutoTauFitter(...)  # 默认串行，适合上层框架调用
+
+        # 新代码（可选 - 窗口搜索并行）
+        from autotau import CyclesAutoTauFitter, AutoTauFitter
+        from concurrent.futures import ProcessPoolExecutor
+
+        executor = ProcessPoolExecutor(max_workers=8)
+        fitter_factory = lambda time, signal, **kw: AutoTauFitter(
+            time, signal, executor=executor, **kw
+        )
+        fitter = CyclesAutoTauFitter(..., fitter_factory=fitter_factory)
+
     利用多核CPU并行处理不同周期的拟合任务，大幅提升多周期数据的处理速度
     """
-    
+
     def __init__(self, time, signal, period, sample_rate, **kwargs):
         """
         初始化并行版CyclesAutoTauFitter
-        
+
+        ⚠️ DEPRECATED: 请改用 CyclesAutoTauFitter(..., fitter_factory=...)
+
         参数:
         -----
         time : array-like
@@ -295,9 +370,34 @@ class ParallelCyclesAutoTauFitter:
             采样率(Hz)
         **kwargs :
             传递给AutoTauFitter的额外参数，如:
-            window_scalar_min, window_scalar_max, window_points_step, window_start_idx_step, 
+            window_scalar_min, window_scalar_max, window_points_step, window_start_idx_step,
             normalize, language, show_progress, max_workers等
         """
+        # ⚠️ 发出废弃警告
+        warnings.warn(
+            "\n"
+            "=" * 70 + "\n"
+            "⚠️  ParallelCyclesAutoTauFitter 已被废弃 (v0.3.0)\n"
+            "=" * 70 + "\n"
+            "请改用灵活的新 API：\n\n"
+            "  from autotau import CyclesAutoTauFitter\n\n"
+            "  # 默认串行（推荐，适合 features_v2 调用）\n"
+            "  fitter = CyclesAutoTauFitter(...)\n\n"
+            "  # 或者使用自定义 factory 实现并行窗口搜索\n"
+            "  from autotau import AutoTauFitter\n"
+            "  from concurrent.futures import ProcessPoolExecutor\n\n"
+            "  executor = ProcessPoolExecutor(max_workers=8)\n"
+            "  factory = lambda t, s, **kw: AutoTauFitter(t, s, executor=executor, **kw)\n"
+            "  fitter = CyclesAutoTauFitter(..., fitter_factory=factory)\n\n"
+            "新架构优势：\n"
+            "  ✓ 避免嵌套并行问题\n"
+            "  ✓ 与 features_v2 等上层框架完美集成\n"
+            "  ✓ 更灵活的并行策略控制\n"
+            "=" * 70,
+            DeprecationWarning,
+            stacklevel=2
+        )
+
         self.time = np.array(time)
         self.signal = np.array(signal)
         self.period = period
