@@ -38,7 +38,7 @@ class CyclesAutoTauFitter:
             normalize : bool, optional
                 是否归一化信号(默认: False)
             language : str, optional
-                界面语言('cn'或'en', 默认: 'cn')
+                界面语言('cn'或'en', 默认: 'en')
             show_progress : bool, optional
                 是否显示进度条(默认: False)
         """
@@ -47,6 +47,7 @@ class CyclesAutoTauFitter:
         self.period = period
         self.sample_rate = sample_rate
         self.auto_tau_fitter_params = kwargs
+        self.language = kwargs.get('language', 'en')
 
         # 结果存储
         self.cycle_results = []
@@ -58,6 +59,88 @@ class CyclesAutoTauFitter:
         self.window_off_offset = None  # 关窗口的时间偏移
         self.window_on_size = None  # 开窗口的大小
         self.window_off_size = None  # 关窗口的大小
+
+        # 语言字典
+        self.text = {
+            'cn': {
+                'no_results': '没有可用的周期结果。请先运行fit_all_cycles()。',
+                'tau_on': 'Tau On',
+                'tau_off': 'Tau Off',
+                'refitted_tau_on': '重新拟合 Tau On',
+                'refitted_tau_off': '重新拟合 Tau Off',
+                'cycle': '周期',
+                'tau_s': 'Tau (s)',
+                'tau_values_per_cycle': '每个周期的Tau值',
+                'invalid_start_cycle': '无效的start_cycle',
+                'must_be_between': '必须介于0和',
+                'data': '数据',
+                'fit': '拟合',
+                'cycle_on_fit': '周期{} - 开启拟合 (τ = {:.5f} s, R² = {:.3f})',
+                'refitted': ' [已重新拟合]',
+                'time_s': '时间 (s)',
+                'signal': '信号',
+                'cycle_off_fit': '周期{} - 关闭拟合 (τ = {:.5f} s, R² = {:.3f})',
+                'fit_results_for_cycles': '周期{}-{}的拟合结果',
+                'r_squared_on': 'R² On',
+                'r_squared_off': 'R² Off',
+                'refitted_on': '重新拟合 On',
+                'refitted_off': '重新拟合 Off',
+                'threshold': '阈值',
+                'r_squared_values_per_cycle': '每个周期的R²值',
+                'r_squared': 'R²',
+                'windows_not_determined': '尚未确定窗口。请先运行find_best_windows()或fit_all_cycles()。',
+                'full_signal_with_windows': '完整信号与开启和关闭窗口',
+                'signal_with_windows_cycles': '信号与开启和关闭窗口(周期{}至{})',
+                'on_window': '开启窗口',
+                'off_window': '关闭窗口',
+                'warning_insufficient_data': '警告: 周期{}的数据点不足。跳过。',
+                'poor_fit_refitting': '周期{}拟合不佳(R² on: {:.3f}, off: {:.3f})。尝试寻找更好的拟合...',
+                'found_better_on_fit': '  找到更好的开启过渡拟合: R²从{:.3f}提高到{:.3f}',
+                'no_better_on_fit': '  无法找到更好的开启过渡拟合。保留原始拟合。',
+                'found_better_off_fit': '  找到更好的关闭过渡拟合: R²从{:.3f}提高到{:.3f}',
+                'no_better_off_fit': '  无法找到更好的关闭过渡拟合。保留原始拟合。',
+                'start_cycle_exceeds_available': '起始周期{}超过可用周期{}'
+            },
+            'en': {
+                'no_results': 'No cycle results available. Please run fit_all_cycles() first.',
+                'tau_on': 'Tau On',
+                'tau_off': 'Tau Off',
+                'refitted_tau_on': 'Refitted Tau On',
+                'refitted_tau_off': 'Refitted Tau Off',
+                'cycle': 'Cycle',
+                'tau_s': 'Tau (s)',
+                'tau_values_per_cycle': 'Tau Values per Cycle',
+                'invalid_start_cycle': 'Invalid start_cycle',
+                'must_be_between': 'must be between 0 and',
+                'data': 'Data',
+                'fit': 'Fit',
+                'cycle_on_fit': 'Cycle {} - On Fit (τ = {:.5f} s, R² = {:.3f})',
+                'refitted': ' [Refitted]',
+                'time_s': 'Time (s)',
+                'signal': 'Signal',
+                'cycle_off_fit': 'Cycle {} - Off Fit (τ = {:.5f} s, R² = {:.3f})',
+                'fit_results_for_cycles': 'Fit Results for Cycles {}-{}',
+                'r_squared_on': 'R² On',
+                'r_squared_off': 'R² Off',
+                'refitted_on': 'Refitted On',
+                'refitted_off': 'Refitted Off',
+                'threshold': 'Threshold',
+                'r_squared_values_per_cycle': 'R² Values per Cycle',
+                'r_squared': 'R²',
+                'windows_not_determined': 'Windows not determined yet. Please run find_best_windows() or fit_all_cycles() first.',
+                'full_signal_with_windows': 'Full Signal with On and Off Windows',
+                'signal_with_windows_cycles': 'Signal with On and Off Windows (Cycles {} to {})',
+                'on_window': 'On Window',
+                'off_window': 'Off Window',
+                'warning_insufficient_data': 'Warning: Insufficient data points for cycle {}. Skipping.',
+                'poor_fit_refitting': 'Poor fit for cycle {}(R² on: {:.3f}, off: {:.3f}). Attempting to find a better fit...',
+                'found_better_on_fit': '  Found better on-transition fit: R² improved from {:.3f} to {:.3f}',
+                'no_better_on_fit': '  Could not find a better on-transition fit. Keeping original.',
+                'found_better_off_fit': '  Found better off-transition fit: R² improved from {:.3f} to {:.3f}',
+                'no_better_off_fit': '  Could not find a better off-transition fit. Keeping original.',
+                'start_cycle_exceeds_available': 'Start cycle {} exceeds available cycles {}'
+            }
+        }
 
     def find_best_windows(self, interp=True, points_after_interp=100):
         """
@@ -289,7 +372,7 @@ class CyclesAutoTauFitter:
             图形大小(宽度, 高度)，单位为英寸
         """
         if not self.cycle_results:
-            print("没有可用的周期结果。请先运行fit_all_cycles()。")
+            print(self.text[self.language]['no_results'])
             return
 
         cycles = [res['cycle'] for res in self.cycle_results]
@@ -304,19 +387,19 @@ class CyclesAutoTauFitter:
 
         plt.figure(figsize=figsize)
         # 绘制所有周期
-        plt.plot(cycles, tau_on_values, 'o-', label='Tau On', color='blue')
-        plt.plot(cycles, tau_off_values, 'o-', label='Tau Off', color='red')
+        plt.plot(cycles, tau_on_values, 'o-', label=self.text[self.language]['tau_on'], color='blue')
+        plt.plot(cycles, tau_off_values, 'o-', label=self.text[self.language]['tau_off'], color='red')
 
         # 突出显示重新拟合的周期
         if refitted_cycles:
             plt.scatter(refitted_cycles, refitted_tau_on, s=100, facecolors='none', edgecolors='blue',
-                        linewidth=2, label='Refitted Tau On')
+                        linewidth=2, label=self.text[self.language]['refitted_tau_on'])
             plt.scatter(refitted_cycles, refitted_tau_off, s=100, facecolors='none', edgecolors='red',
-                        linewidth=2, label='Refitted Tau Off')
+                        linewidth=2, label=self.text[self.language]['refitted_tau_off'])
 
-        plt.xlabel('周期')
-        plt.ylabel('Tau (s)')
-        plt.title('每个周期的Tau值')
+        plt.xlabel(self.text[self.language]['cycle'])
+        plt.ylabel(self.text[self.language]['tau_s'])
+        plt.title(self.text[self.language]['tau_values_per_cycle'])
         plt.legend()
         plt.grid(True)
         plt.show()
@@ -336,12 +419,12 @@ class CyclesAutoTauFitter:
             图形大小(宽度, 高度)，单位为英寸。
         """
         if not self.cycle_results:
-            print("没有可用的周期结果。请先运行fit_all_cycles()。")
+            print(self.text[self.language]['no_results'])
             return
 
         # 验证start_cycle
         if start_cycle < 0 or start_cycle >= len(self.cycle_results):
-            print(f"无效的start_cycle: {start_cycle}。必须介于0和{len(self.cycle_results)-1}之间")
+            print(f"{self.text[self.language]['invalid_start_cycle']}: {start_cycle}. {self.text[self.language]['must_be_between']} 0 and {len(self.cycle_results)-1}")
             return
 
         # 计算要绘制多少个周期
@@ -382,18 +465,18 @@ class CyclesAutoTauFitter:
             t_on = self.time[mask_on]
             s_on = self.signal[mask_on]
 
-            ax_on.plot(t_on, s_on, 'o', label='数据')
+            ax_on.plot(t_on, s_on, 'o', label=self.text[self.language]['data'])
             t_fit = np.linspace(t_on[0], t_on[-1], 100)
-            ax_on.plot(t_fit, fitter.exp_rise(t_fit - t_fit[0], *fitter.tau_on_popt), '-', label='拟合')
+            ax_on.plot(t_fit, fitter.exp_rise(t_fit - t_fit[0], *fitter.tau_on_popt), '-', label=self.text[self.language]['fit'])
 
             # 添加标题和重新拟合信息
-            title = f'周期{actual_cycle_num} - 开启拟合 (τ = {fitter.get_tau_on():.5f} s, R² = {fitter.tau_on_r_squared:.3f})'
+            title = self.text[self.language]['cycle_on_fit'].format(actual_cycle_num, fitter.get_tau_on(), fitter.tau_on_r_squared)
             if was_refitted and 'on' in [info['refit_types'] for info in self.refitted_cycles if info['cycle'] == actual_cycle_num][0]:
-                title += ' [已重新拟合]'
+                title += self.text[self.language]['refitted']
             ax_on.set_title(title)
 
-            ax_on.set_xlabel('时间 (s)')
-            ax_on.set_ylabel('信号')
+            ax_on.set_xlabel(self.text[self.language]['time_s'])
+            ax_on.set_ylabel(self.text[self.language]['signal'])
             ax_on.legend()
             ax_on.grid(True)
 
@@ -404,22 +487,22 @@ class CyclesAutoTauFitter:
             t_off = self.time[mask_off]
             s_off = self.signal[mask_off]
 
-            ax_off.plot(t_off, s_off, 'o', label='数据')
+            ax_off.plot(t_off, s_off, 'o', label=self.text[self.language]['data'])
             t_fit = np.linspace(t_off[0], t_off[-1], 100)
-            ax_off.plot(t_fit, fitter.exp_decay(t_fit - t_fit[0], *fitter.tau_off_popt), '-', label='拟合')
+            ax_off.plot(t_fit, fitter.exp_decay(t_fit - t_fit[0], *fitter.tau_off_popt), '-', label=self.text[self.language]['fit'])
 
             # 添加标题和重新拟合信息
-            title = f'周期{actual_cycle_num} - 关闭拟合 (τ = {fitter.get_tau_off():.5f} s, R² = {fitter.tau_off_r_squared:.3f})'
+            title = self.text[self.language]['cycle_off_fit'].format(actual_cycle_num, fitter.get_tau_off(), fitter.tau_off_r_squared)
             if was_refitted and 'off' in [info['refit_types'] for info in self.refitted_cycles if info['cycle'] == actual_cycle_num][0]:
-                title += ' [已重新拟合]'
+                title += self.text[self.language]['refitted']
             ax_off.set_title(title)
 
-            ax_off.set_xlabel('时间 (s)')
-            ax_off.set_ylabel('信号')
+            ax_off.set_xlabel(self.text[self.language]['time_s'])
+            ax_off.set_ylabel(self.text[self.language]['signal'])
             ax_off.legend()
             ax_off.grid(True)
 
-        plt.suptitle(f'周期{start_cycle+1}-{end_cycle}的拟合结果', fontsize=14)
+        plt.suptitle(self.text[self.language]['fit_results_for_cycles'].format(start_cycle+1, end_cycle), fontsize=14)
         plt.tight_layout(rect=[0, 0, 1, 0.97])  # 为suptitle留出空间
         plt.show()
 
@@ -486,7 +569,7 @@ class CyclesAutoTauFitter:
             图形大小(宽度, 高度)，单位为英寸
         """
         if not self.cycle_results:
-            print("没有可用的周期结果。请先运行fit_all_cycles()。")
+            print(self.text[self.language]['no_results'])
             return
 
         summary = self.get_summary_data()
@@ -497,18 +580,18 @@ class CyclesAutoTauFitter:
         cycles = summary['cycle']
 
         # 绘制R²值
-        plt.plot(cycles, summary['r_squared_on'], 'o-', label='R² On', color='blue')
-        plt.plot(cycles, summary['r_squared_off'], 'o-', label='R² Off', color='red')
+        plt.plot(cycles, summary['r_squared_on'], 'o-', label=self.text[self.language]['r_squared_on'], color='blue')
+        plt.plot(cycles, summary['r_squared_off'], 'o-', label=self.text[self.language]['r_squared_off'], color='red')
 
         # 突出显示重新拟合的周期
         refitted = summary[summary['was_refitted']]
         if not refitted.empty:
             plt.scatter(refitted['cycle'], refitted['r_squared_on'],
                         s=100, facecolors='none', edgecolors='blue', linewidth=2,
-                        label='重新拟合 On')
+                        label=self.text[self.language]['refitted_on'])
             plt.scatter(refitted['cycle'], refitted['r_squared_off'],
                         s=100, facecolors='none', edgecolors='red', linewidth=2,
-                        label='重新拟合 Off')
+                        label=self.text[self.language]['refitted_off'])
 
         # 在阈值处添加水平线(假设为0.95，如果未提供)
         if hasattr(self, 'last_r_squared_threshold'):
@@ -517,11 +600,11 @@ class CyclesAutoTauFitter:
             threshold = 0.95
 
         plt.axhline(y=threshold, color='green', linestyle='--',
-                    label=f'阈值 ({threshold})')
+                    label=f'{self.text[self.language]["threshold"]} ({threshold})')
 
-        plt.xlabel('周期')
-        plt.ylabel('R²')
-        plt.title('每个周期的R²值')
+        plt.xlabel(self.text[self.language]['cycle'])
+        plt.ylabel(self.text[self.language]['r_squared'])
+        plt.title(self.text[self.language]['r_squared_values_per_cycle'])
         plt.legend()
         plt.grid(True)
         plt.ylim(0, 1.05)
@@ -543,7 +626,7 @@ class CyclesAutoTauFitter:
             图形大小(宽度, 高度)，单位为英寸。
         """
         if self.window_on_offset is None or self.window_off_offset is None:
-            print("尚未确定窗口。请先运行find_best_windows()或fit_all_cycles()。")
+            print(self.text[self.language]['windows_not_determined'])
             return
 
         # 创建图形
@@ -551,7 +634,7 @@ class CyclesAutoTauFitter:
 
         if plot_full_signal:
             # 绘制整个信号
-            plt.plot(self.time, self.signal, '-', label='信号')
+            plt.plot(self.time, self.signal, '-', label=self.text[self.language]['signal'])
 
             # 计算数据中有多少个完整周期
             total_cycles = int((self.time[-1] - self.time[0]) / self.period)
@@ -563,7 +646,7 @@ class CyclesAutoTauFitter:
             # 计算有效周期范围
             max_cycle = int((self.time[-1] - self.time[0]) / self.period)
             if start_cycle >= max_cycle:
-                print(f"起始周期{start_cycle}超过可用周期{max_cycle}")
+                print(self.text[self.language]['start_cycle_exceeds_available'].format(start_cycle, max_cycle))
                 return
 
             # 计算要显示的周期范围
@@ -576,19 +659,19 @@ class CyclesAutoTauFitter:
 
             # 过滤出选定时间范围内的数据
             mask = (self.time >= start_time) & (self.time <= end_time)
-            plt.plot(self.time[mask], self.signal[mask], '-', label='信号')
+            plt.plot(self.time[mask], self.signal[mask], '-', label=self.text[self.language]['signal'])
 
             # 为选定的周期添加窗口
             for i in range(start_cycle, end_cycle):
                 self._plot_cycle_windows(i, i==start_cycle)  # 仅将第一个周期包含在图例中
 
-        plt.xlabel('时间 (s)')
-        plt.ylabel('信号')
+        plt.xlabel(self.text[self.language]['time_s'])
+        plt.ylabel(self.text[self.language]['signal'])
 
         if plot_full_signal:
-            plt.title('完整信号与开启和关闭窗口')
+            plt.title(self.text[self.language]['full_signal_with_windows'])
         else:
-            plt.title(f'信号与开启和关闭窗口(周期{start_cycle+1}至{start_cycle+actual_cycles})')
+            plt.title(self.text[self.language]['signal_with_windows_cycles'].format(start_cycle+1, start_cycle+actual_cycles))
 
         plt.legend()
         plt.grid(True)
@@ -617,8 +700,8 @@ class CyclesAutoTauFitter:
 
         # 突出显示开启窗口
         plt.axvspan(on_window_start, on_window_end, alpha=0.2, color='green',
-                    label='开启窗口' if include_in_legend else "")
+                    label=self.text[self.language]['on_window'] if include_in_legend else "")
 
         # 突出显示关闭窗口
         plt.axvspan(off_window_start, off_window_end, alpha=0.2, color='red',
-                    label='关闭窗口' if include_in_legend else "")
+                    label=self.text[self.language]['off_window'] if include_in_legend else "")

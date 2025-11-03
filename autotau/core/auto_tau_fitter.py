@@ -11,7 +11,7 @@ class AutoTauFitter:
     """
     
     def __init__(self, time, signal, sample_step, period, window_scalar_min=1/5, window_scalar_max=1/3, 
-                 window_points_step=10, window_start_idx_step=1, normalize=False, language='cn', show_progress=False):
+                 window_points_step=10, window_start_idx_step=1, normalize=False, language='en', show_progress=False):
         """
         初始化AutoTauFitter
         

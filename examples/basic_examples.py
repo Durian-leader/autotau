@@ -18,9 +18,7 @@ from autotau import (
     ParallelCyclesAutoTauFitter
 )
 
-# 设置matplotlib中文字体
-plt.rcParams['font.sans-serif'] = ['SimHei']  # 使用黑体
-plt.rcParams['axes.unicode_minus'] = False    # 解决负号显示问题
+
 
 def normalize_signal(signal):
     """将信号归一化到0-1范围"""
@@ -112,7 +110,7 @@ def auto_tau_fitter_example():
         window_points_step=5,
         window_start_idx_step=2,
         normalize=False,
-        language='cn',
+        language='en',
         show_progress=True
     )
     
@@ -150,7 +148,7 @@ def cycles_auto_tau_fitter_example():
         window_points_step=5,
         window_start_idx_step=2,
         normalize=False,
-        language='cn',
+        language='en',
         show_progress=True
     )
     
@@ -190,7 +188,7 @@ def parallel_example():
         window_points_step=10,
         window_start_idx_step=2,
         normalize=False,
-        language='cn',
+        language='en',
         show_progress=True,
         max_cycles=5  # 仅处理前5个周期以加快示例运行速度
     )
@@ -213,7 +211,7 @@ def parallel_example():
         window_points_step=10,
         window_start_idx_step=2,
         normalize=False,
-        language='cn',
+        language='en',
         show_progress=True,
         max_cycles=5,  # 仅处理前5个周期以加快示例运行速度
         max_workers=None  # 使用所有可用CPU核心

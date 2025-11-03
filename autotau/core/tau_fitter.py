@@ -9,7 +9,7 @@ class TauFitter:
     可以用于拟合开启过程（上升指数）和关闭过程（下降指数）的时间常数tau
     """
     
-    def __init__(self, time, signal, t_on_idx=None, t_off_idx=None, normalize=False, language='cn'):
+    def __init__(self, time, signal, t_on_idx=None, t_off_idx=None, normalize=False, language='en'):
         """
         初始化TauFitter类
         
@@ -57,7 +57,8 @@ class TauFitter:
                 'time': '时间 (s)',
                 'signal': '信号',
                 'fit_equation': '拟合方程',
-                'adj_r_squared': '调整R平方'
+                'adj_r_squared': '调整R平方',
+                'r_squared': 'R平方'
             },
             'en': {
                 'fit_fail_on': 'Failed to fit turn-on process: ',
@@ -71,7 +72,8 @@ class TauFitter:
                 'time': 'Time (s)',
                 'signal': 'Signal',
                 'fit_equation': 'Fitting Equation',
-                'adj_r_squared': 'Adjusted R Square'
+                'adj_r_squared': 'Adjusted R Square',
+                'r_squared': 'R Square'
             }
         }
 
@@ -195,14 +197,14 @@ class TauFitter:
                   f'τ_on = {self.get_tau_on():.5f} s\n'
                   f'A = {self.tau_on_popt[0]:.5f}\n'
                   f'C = {self.tau_on_popt[2]:.5f}\n'
-                  f'R平方 = {self.tau_on_r_squared:.5f}\n'
+                  f'{self.text["cn"]["r_squared"]} = {self.tau_on_r_squared:.5f}\n'
                   f'{self.text["cn"]["adj_r_squared"]} = {self.tau_on_r_squared_adj:.5f}')
                   
         text_en = (f'{self.text["en"]["fit_equation"]}: y = A(1-e^(-t/τ)) + C\n'
                   f'τ_on = {self.get_tau_on():.5f} s\n'
                   f'A = {self.tau_on_popt[0]:.5f}\n'
                   f'C = {self.tau_on_popt[2]:.5f}\n'
-                  f'R Square = {self.tau_on_r_squared:.5f}\n'
+                  f'{self.text["en"]["r_squared"]} = {self.tau_on_r_squared:.5f}\n'
                   f'{self.text["en"]["adj_r_squared"]} = {self.tau_on_r_squared_adj:.5f}')
                   
         plt.text(0.05, 0.95, text_cn if self.language == 'cn' else text_en,
@@ -235,14 +237,14 @@ class TauFitter:
                   f'τ_off = {self.get_tau_off():.5f} s\n'
                   f'A = {self.tau_off_popt[0]:.5f}\n'
                   f'C = {self.tau_off_popt[2]:.5f}\n'
-                  f'R平方 = {self.tau_off_r_squared:.5f}\n'
+                  f'{self.text["cn"]["r_squared"]} = {self.tau_off_r_squared:.5f}\n'
                   f'{self.text["cn"]["adj_r_squared"]} = {self.tau_off_r_squared_adj:.5f}')
                   
         text_en = (f'{self.text["en"]["fit_equation"]}: y = Ae^(-t/τ) + C\n'
                   f'τ_off = {self.get_tau_off():.5f} s\n'
                   f'A = {self.tau_off_popt[0]:.5f}\n'
                   f'C = {self.tau_off_popt[2]:.5f}\n'
-                  f'R Square = {self.tau_off_r_squared:.5f}\n'
+                  f'{self.text["en"]["r_squared"]} = {self.tau_off_r_squared:.5f}\n'
                   f'{self.text["en"]["adj_r_squared"]} = {self.tau_off_r_squared_adj:.5f}')
                   
         plt.text(0.05, 0.95, text_cn if self.language == 'cn' else text_en,

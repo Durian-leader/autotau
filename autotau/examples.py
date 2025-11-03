@@ -18,9 +18,7 @@ from autotau import (
     ParallelCyclesAutoTauFitter
 )
 
-# 设置matplotlib中文字体
-plt.rcParams['font.sans-serif'] = ['SimHei']  # 使用黑体
-plt.rcParams['axes.unicode_minus'] = False    # 解决负号显示问题
+
 
 def normalize_signal(signal):
     """将信号归一化到0-1范围"""
@@ -94,20 +92,19 @@ def compare_performance():
     # 测试AutoTauFitter - 只使用前两个周期
     print("\n串行版自动拟合器:")
     t_start = time.time()
-    auto_fitter = AutoTauFitter(
-        time_data_two_cycles, 
-        current_data_two_cycles,
-        sample_step=sample_step,
-        period=period,
-        window_scalar_min=0.2,
-        window_scalar_max=1/3,
-        window_points_step=10,
-        window_start_idx_step=2,
-        normalize=False,
-        language='cn',
-        show_progress=True
-    )
-    auto_fitter.fit_tau_on_and_off(interp=True)
+        auto_fitter = AutoTauFitter(
+            time_data_two_cycles,
+            current_data_two_cycles,
+            sample_step=sample_step,
+            period=period,
+            window_scalar_min=0.2,
+            window_scalar_max=1/3,
+            window_points_step=10,
+            window_start_idx_step=2,
+            normalize=False,
+            language='en',
+            show_progress=True
+        )    auto_fitter.fit_tau_on_and_off(interp=True)
     t_end = time.time()
     serial_time = t_end - t_start
     print(f"串行自动拟合耗时: {serial_time:.2f} 秒")
@@ -115,20 +112,19 @@ def compare_performance():
     # 测试ParallelAutoTauFitter - 只使用前两个周期
     print("\n并行版自动拟合器:")
     t_start = time.time()
-    parallel_auto_fitter = ParallelAutoTauFitter(
-        time_data_two_cycles, 
-        current_data_two_cycles,
-        sample_step=sample_step,
-        period=period,
-        window_scalar_min=0.2,
-        window_scalar_max=1/3,
-        window_points_step=10,
-        window_start_idx_step=2,
-        normalize=False,
-        language='cn',
-        show_progress=True
-    )
-    parallel_auto_fitter.fit_tau_on_and_off(interp=True)
+        parallel_auto_fitter = ParallelAutoTauFitter(
+            time_data_two_cycles,
+            current_data_two_cycles,
+            sample_step=sample_step,
+            period=period,
+            window_scalar_min=0.2,
+            window_scalar_max=1/3,
+            window_points_step=10,
+            window_start_idx_step=2,
+            normalize=False,
+            language='en',
+            show_progress=True
+        )    parallel_auto_fitter.fit_tau_on_and_off(interp=True)
     t_end = time.time()
     parallel_time = t_end - t_start
     print(f"并行自动拟合耗时: {parallel_time:.2f} 秒")
@@ -162,7 +158,7 @@ def compare_performance():
         window_points_step=10,
         window_start_idx_step=2,
         normalize=False,
-        language='cn',
+        language='en',
         show_progress=True
     )
     cycles_fitter.fit_all_cycles(interp=True)
@@ -182,7 +178,7 @@ def compare_performance():
         window_points_step=10,
         window_start_idx_step=2,
         normalize=False,
-        language='cn',
+        language='en',
         show_progress=True,
         max_workers=None  # 使用所有可用CPU核心
     )
@@ -230,7 +226,7 @@ def plot_parallel_results():
         window_points_step=10,
         window_start_idx_step=2,
         normalize=False,
-        language='cn',
+        language='en',
         show_progress=True,
         max_workers=None  # 使用所有可用CPU核心
     )

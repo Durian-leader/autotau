@@ -7,7 +7,7 @@ long_description = (here / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="autotau",
-    version="0.2.0",
+    version="0.2.1",
     packages=find_packages(),
     install_requires=[
         "numpy>=1.18.0",
@@ -18,7 +18,7 @@ setup(
     ],
     author="Donghao Li",
     author_email="lidonghao100@outlook.com",
-    description="自动化时间常数tau拟合工具，支持并行处理",
+    description="Automated time constant (tau) fitting tool with parallel processing support",
     long_description=long_description,
     long_description_content_type="text/markdown",  # 指定格式为Markdown
     keywords="tau, fitting, exponential, signal processing, parallel",
