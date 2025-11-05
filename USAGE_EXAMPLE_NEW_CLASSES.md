@@ -86,7 +86,7 @@ fitter = ParallelCyclesTauFitter(
 )
 
 # 拟合所有周期 / Fit all cycles
-results = fitter.fit_all_cycles()
+results = fitter.fit_all_cycles()  # 默认返回 DataFrame；如需列表记录：fit_all_cycles(return_format='records')
 
 # 4. 查看和分析结果 / View and analyze results
 summary = fitter.get_summary_data()

@@ -71,8 +71,8 @@ class ParallelCyclesTauFitter:
         # 使用与并行模块一致的多进程上下文（优先 fork，有利于性能）
         self._mp_context = _get_mp_context()
 
-        # 结果存储
-        self.cycle_results = []
+        # 结果存储（DataFrame 或记录列表）。默认使用 DataFrame。
+        self.cycle_results = None
 
         # 语言字典
         self.text = {
@@ -204,7 +204,7 @@ class ParallelCyclesTauFitter:
 
         return result
 
-    def fit_all_cycles(self, interp=True, points_after_interp=100):
+    def fit_all_cycles(self, interp=True, points_after_interp=100, return_format='dataframe'):
         """
         使用分块并行处理拟合所有周期的tau值（每个进程处理一组周期，降低调度与序列化开销）
 
@@ -217,23 +217,48 @@ class ParallelCyclesTauFitter:
 
         返回:
         -----
-        list of dict
-            包含每个周期拟合结果的列表
+        - return_format='dataframe'（默认）：返回 pandas.DataFrame，列包括：
+          ['cycle','cycle_start_time','tau_on','tau_off',
+           'r_squared_on','r_squared_off','r_squared_adj_on','r_squared_adj_off',
+           'window_on_start_time','window_on_end_time','window_off_start_time','window_off_end_time',
+           'window_on_start_idx','window_on_end_idx','window_off_start_idx','window_off_end_idx']
+        - return_format='records'：返回与旧版兼容的记录列表（不含每周期的 'fitter' 对象）。
         """
         # 计算完整周期数量
         total_time = float(self.time[-1] - self.time[0])
         num_cycles = int(total_time / float(self.period))
 
         if num_cycles <= 0:
-            self.cycle_results = []
-            return self.cycle_results
+            empty_df = pd.DataFrame(columns=[
+                'cycle','cycle_start_time','tau_on','tau_off',
+                'r_squared_on','r_squared_off','r_squared_adj_on','r_squared_adj_off',
+                'window_on_start_time','window_on_end_time','window_off_start_time','window_off_end_time',
+                'window_on_start_idx','window_on_end_idx','window_off_start_idx','window_off_end_idx'
+            ])
+            self.cycle_results = empty_df
+            return empty_df if return_format == 'dataframe' else []
 
         # 计算合理的分块大小（与 parallel.py 保持一致的策略）
         chunk_size = _auto_chunk_size(num_cycles, self.max_workers)
         chunks = list(_chunk_sequence(num_cycles, chunk_size))
 
-        # 重置结果
-        self.cycle_results = []
+        # 轻量列容器，避免构建巨型嵌套对象
+        col_cycle = []
+        col_cycle_start_time = []
+        col_tau_on = []
+        col_tau_off = []
+        col_r2_on = []
+        col_r2_off = []
+        col_r2a_on = []
+        col_r2a_off = []
+        col_on_st = []
+        col_on_et = []
+        col_off_st = []
+        col_off_et = []
+        col_on_si = []
+        col_on_ei = []
+        col_off_si = []
+        col_off_ei = []
 
         # 初始化每个进程的只读共享状态，避免为每个周期重复序列化大数组
         base_time = float(self.time[0])
@@ -271,58 +296,58 @@ class ParallelCyclesTauFitter:
             if self.show_progress:
                 mapped = tqdm(mapped, total=len(chunks), desc="Parallel fitting cycles (chunked)")
 
-            # 扁平化结果并构建与原API兼容的条目（含fitter）
-            flat_results = []
+            # 累积轻量列数据
             for chunk_results in mapped:
                 for r in chunk_results:
                     if r.get('status') == 'skipped':
                         if self.show_progress and r.get('message'):
                             print(r['message'])
                         continue
-                    flat_results.append(r)
+                    col_cycle.append(int(r['cycle']))
+                    col_cycle_start_time.append(float(r.get('cycle_start_time', np.nan)))
+                    col_tau_on.append(r.get('tau_on'))
+                    col_tau_off.append(r.get('tau_off'))
+                    col_r2_on.append(r.get('tau_on_r_squared'))
+                    col_r2_off.append(r.get('tau_off_r_squared'))
+                    col_r2a_on.append(r.get('tau_on_r_squared_adj'))
+                    col_r2a_off.append(r.get('tau_off_r_squared_adj'))
+                    col_on_st.append(r.get('window_on_start_time'))
+                    col_on_et.append(r.get('window_on_end_time'))
+                    col_off_st.append(r.get('window_off_start_time'))
+                    col_off_et.append(r.get('window_off_end_time'))
+                    col_on_si.append(r.get('window_on_start_idx'))
+                    col_on_ei.append(r.get('window_on_end_idx'))
+                    col_off_si.append(r.get('window_off_start_idx'))
+                    col_off_ei.append(r.get('window_off_end_idx'))
 
-        # 在主进程创建 TauFitter，并填充拟合参数以保持API不变
-        for r in flat_results:
-            fitter = TauFitter(
-                self.time,
-                self.signal,
-                t_on_idx=[r['window_on_start_time'], r['window_on_end_time']],
-                t_off_idx=[r['window_off_start_time'], r['window_off_end_time']],
-                normalize=self.normalize,
-                language=self.language,
-            )
-            # 回填拟合结果（避免重复计算）
-            if r.get('tau_on_popt') is not None:
-                fitter.tau_on_popt = np.array(r['tau_on_popt'])
-            if r.get('tau_on_pcov') is not None:
-                fitter.tau_on_pcov = np.array(r['tau_on_pcov'])
-            if r.get('tau_off_popt') is not None:
-                fitter.tau_off_popt = np.array(r['tau_off_popt'])
-            if r.get('tau_off_pcov') is not None:
-                fitter.tau_off_pcov = np.array(r['tau_off_pcov'])
-            fitter.tau_on_r_squared = r.get('tau_on_r_squared')
-            fitter.tau_off_r_squared = r.get('tau_off_r_squared')
-            fitter.tau_on_r_squared_adj = r.get('tau_on_r_squared_adj')
-            fitter.tau_off_r_squared_adj = r.get('tau_off_r_squared_adj')
+        df = pd.DataFrame({
+            'cycle': col_cycle,
+            'cycle_start_time': col_cycle_start_time,
+            'tau_on': col_tau_on,
+            'tau_off': col_tau_off,
+            'r_squared_on': col_r2_on,
+            'r_squared_off': col_r2_off,
+            'r_squared_adj_on': col_r2a_on,
+            'r_squared_adj_off': col_r2a_off,
+            'window_on_start_time': col_on_st,
+            'window_on_end_time': col_on_et,
+            'window_off_start_time': col_off_st,
+            'window_off_end_time': col_off_et,
+            'window_on_start_idx': col_on_si,
+            'window_on_end_idx': col_on_ei,
+            'window_off_start_idx': col_off_si,
+            'window_off_end_idx': col_off_ei,
+        })
+        df.sort_values('cycle', inplace=True)
+        df.reset_index(drop=True, inplace=True)
 
-            self.cycle_results.append({
-                'status': 'success',
-                'cycle': r['cycle'],
-                'cycle_start_time': r.get('cycle_start_time'),
-                'tau_on': r.get('tau_on'),
-                'tau_off': r.get('tau_off'),
-                'tau_on_popt': fitter.tau_on_popt,
-                'tau_off_popt': fitter.tau_off_popt,
-                'tau_on_r_squared': fitter.tau_on_r_squared,
-                'tau_off_r_squared': fitter.tau_off_r_squared,
-                'tau_on_r_squared_adj': fitter.tau_on_r_squared_adj,
-                'tau_off_r_squared_adj': fitter.tau_off_r_squared_adj,
-                'fitter': fitter,
-            })
-
-        # 按周期排序
-        self.cycle_results.sort(key=lambda x: x['cycle'])
-        return self.cycle_results
+        self.cycle_results = df
+        if return_format == 'dataframe':
+            return df
+        elif return_format == 'records':
+            return df.to_dict(orient='records')
+        else:
+            raise ValueError("return_format must be 'dataframe' or 'records'")
 
     def plot_cycle_results(self, figsize=(10, 6), dual_y_axis=True):
         """
@@ -335,13 +360,17 @@ class ParallelCyclesTauFitter:
         dual_y_axis : bool, optional
             是否使用双y轴, 默认为True
         """
-        if not self.cycle_results:
+        if self.cycle_results is None or (isinstance(self.cycle_results, list) and not self.cycle_results) or (hasattr(self.cycle_results, 'empty') and self.cycle_results.empty):
             print(self.text[self.language]['no_results'])
             return
-
-        cycles = [res['cycle'] for res in self.cycle_results]
-        tau_on_values = [res['tau_on'] for res in self.cycle_results]
-        tau_off_values = [res['tau_off'] for res in self.cycle_results]
+        if isinstance(self.cycle_results, pd.DataFrame):
+            cycles = self.cycle_results['cycle'].to_numpy()
+            tau_on_values = self.cycle_results['tau_on'].to_numpy()
+            tau_off_values = self.cycle_results['tau_off'].to_numpy()
+        else:
+            cycles = [res['cycle'] for res in self.cycle_results]
+            tau_on_values = [res['tau_on'] for res in self.cycle_results]
+            tau_off_values = [res['tau_off'] for res in self.cycle_results]
 
         fig, ax1 = plt.subplots(figsize=figsize)
 
@@ -387,17 +416,18 @@ class ParallelCyclesTauFitter:
         figsize : tuple, optional
             图形大小(宽度, 高度)，单位为英寸。
         """
-        if not self.cycle_results:
+        if self.cycle_results is None or (isinstance(self.cycle_results, list) and not self.cycle_results) or (hasattr(self.cycle_results, 'empty') and self.cycle_results.empty):
             print(self.text[self.language]['no_results'])
             return
 
         # 验证start_cycle
-        if start_cycle < 0 or start_cycle >= len(self.cycle_results):
-            print(f"{self.text[self.language]['invalid_start_cycle']}: {start_cycle}. {self.text[self.language]['must_be_between']} 0 and {len(self.cycle_results)-1}")
+        total_n = len(self.cycle_results) if isinstance(self.cycle_results, list) else len(self.cycle_results.index)
+        if start_cycle < 0 or start_cycle >= total_n:
+            print(f"{self.text[self.language]['invalid_start_cycle']}: {start_cycle}. {self.text[self.language]['must_be_between']} 0 and {total_n-1}")
             return
 
         # 计算要绘制多少个周期
-        cycles_remaining = len(self.cycle_results) - start_cycle
+        cycles_remaining = total_n - start_cycle
 
         if num_cycles is None:
             # 如果为None，绘制所有剩余周期(限制为10)
@@ -420,11 +450,18 @@ class ParallelCyclesTauFitter:
 
         for i in range(num_cycles):
             cycle_idx = start_cycle + i
-            actual_cycle_num = self.cycle_results[cycle_idx]['cycle']
-
-            # 获取周期结果
-            result = self.cycle_results[cycle_idx]
-            fitter = result['fitter']
+            if isinstance(self.cycle_results, pd.DataFrame):
+                row = self.cycle_results.iloc[cycle_idx]
+                actual_cycle_num = int(row['cycle'])
+                fitter = self._build_fitter_from_row(row, interp=True, points=100)
+                if fitter is None or fitter.tau_on_popt is None or fitter.tau_off_popt is None:
+                    axes[i, 0].axis('off')
+                    axes[i, 1].axis('off')
+                    continue
+            else:
+                actual_cycle_num = self.cycle_results[cycle_idx]['cycle']
+                result = self.cycle_results[cycle_idx]
+                fitter = result['fitter']
 
             # 绘制开启拟合
             ax_on = axes[i, 0]
@@ -437,7 +474,7 @@ class ParallelCyclesTauFitter:
             t_fit = np.linspace(t_on[0], t_on[-1], 100)
             ax_on.plot(t_fit, fitter.exp_rise(t_fit - t_fit[0], *fitter.tau_on_popt), '-', label=self.text[self.language]['fit'])
 
-            title = self.text[self.language]['cycle_on_fit'].format(actual_cycle_num, fitter.get_tau_on(), fitter.tau_on_r_squared)
+            title = self.text[self.language]['cycle_on_fit'].format(actual_cycle_num, fitter.get_tau_on(), getattr(fitter, 'tau_on_r_squared', None))
             ax_on.set_title(title)
 
             ax_on.set_xlabel(self.text[self.language]['time_s'])
@@ -456,7 +493,7 @@ class ParallelCyclesTauFitter:
             t_fit = np.linspace(t_off[0], t_off[-1], 100)
             ax_off.plot(t_fit, fitter.exp_decay(t_fit - t_fit[0], *fitter.tau_off_popt), '-', label=self.text[self.language]['fit'])
 
-            title = self.text[self.language]['cycle_off_fit'].format(actual_cycle_num, fitter.get_tau_off(), fitter.tau_off_r_squared)
+            title = self.text[self.language]['cycle_off_fit'].format(actual_cycle_num, fitter.get_tau_off(), getattr(fitter, 'tau_off_r_squared', None))
             ax_off.set_title(title)
 
             ax_off.set_xlabel(self.text[self.language]['time_s'])
@@ -477,32 +514,35 @@ class ParallelCyclesTauFitter:
         pandas.DataFrame
             包含周期号、开始时间、tau值和R平方值的DataFrame
         """
-        if not self.cycle_results:
+        if self.cycle_results is None or (isinstance(self.cycle_results, list) and not self.cycle_results) or (hasattr(self.cycle_results, 'empty') and self.cycle_results.empty):
             print(self.text[self.language]['no_results'])
             return None
 
-        data = {
-            'cycle': [],
-            'cycle_start_time': [],
-            'tau_on': [],
-            'tau_off': [],
-            'r_squared_on': [],
-            'r_squared_off': [],
-            'r_squared_adj_on': [],
-            'r_squared_adj_off': []
-        }
-
-        for res in self.cycle_results:
-            data['cycle'].append(res['cycle'])
-            data['cycle_start_time'].append(res['cycle_start_time'])
-            data['tau_on'].append(res['tau_on'])
-            data['tau_off'].append(res['tau_off'])
-            data['r_squared_on'].append(res['tau_on_r_squared'])
-            data['r_squared_off'].append(res['tau_off_r_squared'])
-            data['r_squared_adj_on'].append(res['tau_on_r_squared_adj'])
-            data['r_squared_adj_off'].append(res['tau_off_r_squared_adj'])
-
-        return pd.DataFrame(data)
+        if isinstance(self.cycle_results, pd.DataFrame):
+            cols = ['cycle','cycle_start_time','tau_on','tau_off','r_squared_on','r_squared_off','r_squared_adj_on','r_squared_adj_off']
+            existing = [c for c in cols if c in self.cycle_results.columns]
+            return self.cycle_results[existing].copy()
+        else:
+            data = {
+                'cycle': [],
+                'cycle_start_time': [],
+                'tau_on': [],
+                'tau_off': [],
+                'r_squared_on': [],
+                'r_squared_off': [],
+                'r_squared_adj_on': [],
+                'r_squared_adj_off': []
+            }
+            for res in self.cycle_results:
+                data['cycle'].append(res['cycle'])
+                data['cycle_start_time'].append(res['cycle_start_time'])
+                data['tau_on'].append(res['tau_on'])
+                data['tau_off'].append(res['tau_off'])
+                data['r_squared_on'].append(res.get('tau_on_r_squared') or res.get('r_squared_on'))
+                data['r_squared_off'].append(res.get('tau_off_r_squared') or res.get('r_squared_off'))
+                data['r_squared_adj_on'].append(res.get('tau_on_r_squared_adj') or res.get('r_squared_adj_on'))
+                data['r_squared_adj_off'].append(res.get('tau_off_r_squared_adj') or res.get('r_squared_adj_off'))
+            return pd.DataFrame(data)
 
     def plot_r_squared_values(self, figsize=(10, 6), threshold=None):
         """
@@ -515,7 +555,7 @@ class ParallelCyclesTauFitter:
         threshold : float, optional
             R²阈值线，如果提供则在图中绘制水平线
         """
-        if not self.cycle_results:
+        if self.cycle_results is None or (isinstance(self.cycle_results, list) and not self.cycle_results) or (hasattr(self.cycle_results, 'empty') and self.cycle_results.empty):
             print(self.text[self.language]['no_results'])
             return
 
@@ -634,3 +674,29 @@ class ParallelCyclesTauFitter:
         # 突出显示关闭窗口
         plt.axvspan(off_window_start, off_window_end, alpha=0.2, color='red',
                     label=self.text[self.language]['off_window'] if include_in_legend else "")
+
+    def _build_fitter_from_row(self, row, interp=True, points=100):
+        """根据 DataFrame 行信息按需构建 TauFitter（仅用于小规模可视化）。
+
+        如果行中不包含 popt，将在对应窗口内执行一次拟合。
+        """
+        try:
+            on_start = float(row['window_on_start_time'])
+            on_end = float(row['window_on_end_time'])
+            off_start = float(row['window_off_start_time'])
+            off_end = float(row['window_off_end_time'])
+        except Exception:
+            return None
+
+        fitter = TauFitter(
+            self.time,
+            self.signal,
+            t_on_idx=[on_start, on_end],
+            t_off_idx=[off_start, off_end],
+            normalize=self.normalize,
+            language=self.language,
+        )
+        # 拟合（仅在可视化时小量调用）
+        fitter.fit_tau_on(interp=interp, points_after_interp=points)
+        fitter.fit_tau_off(interp=interp, points_after_interp=points)
+        return fitter

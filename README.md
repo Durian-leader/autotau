@@ -285,7 +285,7 @@ fitter = ParallelCyclesTauFitter(
     max_workers=8
 )
 
-results = fitter.fit_all_cycles()
+results = fitter.fit_all_cycles()  # 默认返回 DataFrame（更适合大规模周期）
 ```
 
 ## 性能对比

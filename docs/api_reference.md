@@ -180,4 +180,5 @@ results = fitter.fit_all_cycles()
 说明：
 - 采用分块（chunked）并行：每个进程处理一组周期索引，避免“每周期一个任务”的高调度与序列化开销。
 - 分块大小自动估计并随 `max_workers` 调整，通常无需额外参数即可获得良好吞吐。
-- 返回结果结构与 `CyclesTauFitter` 保持一致，包含每周期的 `fitter` 与 R² 指标，可直接复用绘图与汇总方法。
+ - 返回结果包含每周期数值指标（τ与R²）及窗口信息；绘图方法会在需要时按行即时重建小量 `TauFitter` 以便可视化，不再为每个周期常驻保存 `fitter` 对象。
+ - `fit_all_cycles(return_format='dataframe')` 默认返回 pandas.DataFrame（推荐，用于大规模周期数）。如需旧版列表记录，使用 `return_format='records'`，但不再包含逐周期 `fitter` 对象以减少内存与拼接开销。
