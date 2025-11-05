@@ -54,7 +54,7 @@ class WindowFinder:
         self.window_length_min = window_scalar_min * self.period
         self.window_length_max = window_scalar_max * self.period
         self.show_progress = show_progress
-        self.max_workers = max_workers if max_workers else multiprocessing.cpu_count()
+        self.max_workers = max_workers if max_workers is not None else multiprocessing.cpu_count()
 
         self.window_points_step = window_points_step
         self.window_start_idx_step = window_start_idx_step
