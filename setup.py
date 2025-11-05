@@ -7,7 +7,7 @@ long_description = (here / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="autotau",
-    version="0.3.2",
+    version="0.4.0",
     packages=find_packages(),
     install_requires=[
         "numpy>=1.18.0",
