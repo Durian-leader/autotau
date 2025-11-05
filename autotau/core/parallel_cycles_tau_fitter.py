@@ -51,9 +51,10 @@ class ParallelCyclesTauFitter:
         self.signal = np.array(signal)
         self.period = period
         self.sample_rate = sample_rate
-        self.window_on_offset = window_on_offset
+        # 对偏移量取模，确保在 [0, period) 范围内，避免窗口位置偏移
+        self.window_on_offset = window_on_offset % period
         self.window_on_size = window_on_size
-        self.window_off_offset = window_off_offset
+        self.window_off_offset = window_off_offset % period
         self.window_off_size = window_off_size
         self.normalize = normalize
         self.language = language
