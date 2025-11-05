@@ -1,3 +1,14 @@
+import math
+import os
+
+# Ensure heavy numeric libraries do not oversubscribe CPU cores before NumPy loads.
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+os.environ.setdefault('NUMEXPR_NUM_THREADS', '1')
+
+from itertools import repeat
+
 import numpy as np
 import concurrent.futures
 import multiprocessing
@@ -7,6 +18,369 @@ import warnings
 from .tau_fitter import TauFitter
 from .auto_tau_fitter import AutoTauFitter
 import matplotlib.pyplot as plt
+
+
+def _get_mp_context():
+    """Return a multiprocessing context that favours fork when available."""
+    try:
+        return multiprocessing.get_context('fork')
+    except ValueError:  # Windows / platforms without fork support
+        return multiprocessing.get_context('spawn')
+
+
+def _auto_chunk_size(total_items, max_workers, *, min_chunk=256, max_chunk=20000, target_chunks_per_worker=8):
+    """Compute a reasonable chunk size for distributing work evenly."""
+    if max_workers <= 0:
+        raise ValueError("max_workers must be positive")
+    if total_items <= 0:
+        return min_chunk
+
+    estimated = max(total_items // (max_workers * target_chunks_per_worker), 1)
+    estimated = max(min_chunk, estimated)
+    return min(max_chunk, estimated)
+
+
+def _chunk_sequence(sequence_length, chunk_size):
+    """Yield tuple chunks of monotonically increasing indices."""
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+
+    for start in range(0, sequence_length, chunk_size):
+        end = min(sequence_length, start + chunk_size)
+        yield tuple(range(start, end))
+
+
+def _chunk_pairs(pair_iterable, chunk_size):
+    """Yield tuple chunks from an iterable of (window_points, start_idx)."""
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+
+    batch = []
+    for pair in pair_iterable:
+        batch.append(pair)
+        if len(batch) >= chunk_size:
+            yield tuple(batch)
+            batch.clear()
+    if batch:
+        yield tuple(batch)
+
+
+_WINDOW_WORKER_STATE = {}
+_CYCLE_WORKER_STATE = {}
+
+
+def _init_window_worker(time, signal, sample_step, language, normalize):
+    """Initialise per-process state for window-based workers."""
+    time = np.asarray(time)
+    signal = np.asarray(signal)
+    time.setflags(write=False)
+    signal.setflags(write=False)
+
+    _WINDOW_WORKER_STATE.clear()
+    _WINDOW_WORKER_STATE.update({
+        'time': time,
+        'signal': signal,
+        'sample_step': float(sample_step),
+        'language': language,
+        'normalize': bool(normalize),
+    })
+
+
+def _init_cycle_worker(time, signal, sample_rate, period, language, normalize,
+                       window_on_offset, window_on_size, window_off_offset, window_off_size,
+                       auto_tau_params, base_time):
+    """Initialise per-process state for cycle-based workers."""
+    time = np.asarray(time)
+    signal = np.asarray(signal)
+    time.setflags(write=False)
+    signal.setflags(write=False)
+
+    _CYCLE_WORKER_STATE.clear()
+    _CYCLE_WORKER_STATE.update({
+        'time': time,
+        'signal': signal,
+        'sample_rate': float(sample_rate),
+        'period': float(period),
+        'language': language,
+        'normalize': bool(normalize),
+        'window_on_offset': float(window_on_offset),
+        'window_on_size': float(window_on_size),
+        'window_off_offset': float(window_off_offset),
+        'window_off_size': float(window_off_size),
+        'auto_tau_params': auto_tau_params,
+        'base_time': float(base_time),
+    })
+
+
+def _process_window_chunk(chunk, interp, points_after_interp):
+    """Process a chunk of window configurations and return the best fits."""
+    state = _WINDOW_WORKER_STATE
+    time = state['time']
+    signal = state['signal']
+    sample_step = state['sample_step']
+    language = state['language']
+    normalize = state['normalize']
+
+    best_on = None
+    best_off = None
+
+    for window_points, start_idx in chunk:
+        end_idx = start_idx + window_points
+        if end_idx > time.shape[0]:
+            continue
+
+        window_time = time[start_idx:end_idx]
+        window_signal = signal[start_idx:end_idx]
+        if window_time.size < 3:
+            continue
+
+        try:
+            tau_fitter = TauFitter(
+                window_time,
+                window_signal,
+                t_on_idx=[float(window_time[0]), float(window_time[-1])],
+                t_off_idx=[float(window_time[0]), float(window_time[-1])],
+                language=language,
+                normalize=normalize,
+            )
+
+            on_popt, on_pcov, on_r2, on_r2_adj = tau_fitter.fit_tau_on(
+                interp=interp,
+                points_after_interp=points_after_interp,
+            )
+            off_popt, off_pcov, off_r2, off_r2_adj = tau_fitter.fit_tau_off(
+                interp=interp,
+                points_after_interp=points_after_interp,
+            )
+        except Exception:
+            continue
+
+        on_candidate = {
+            'start_idx': start_idx,
+            'end_idx': end_idx,
+            'window_points': window_points,
+            'window_start_time': float(window_time[0]),
+            'window_end_time': float(window_time[-1]),
+            'window_size': window_points * sample_step,
+            'tau_popt': tuple(map(float, on_popt)),
+            'tau_pcov': on_pcov.tolist() if on_pcov is not None else None,
+            'r_squared': float(on_r2),
+            'r_squared_adj': float(on_r2_adj),
+        }
+
+        if best_on is None or on_candidate['r_squared_adj'] > best_on['r_squared_adj']:
+            best_on = on_candidate
+
+        off_candidate = {
+            'start_idx': start_idx,
+            'end_idx': end_idx,
+            'window_points': window_points,
+            'window_start_time': float(window_time[0]),
+            'window_end_time': float(window_time[-1]),
+            'window_size': window_points * sample_step,
+            'tau_popt': tuple(map(float, off_popt)),
+            'tau_pcov': off_pcov.tolist() if off_pcov is not None else None,
+            'r_squared': float(off_r2),
+            'r_squared_adj': float(off_r2_adj),
+        }
+
+        if best_off is None or off_candidate['r_squared_adj'] > best_off['r_squared_adj']:
+            best_off = off_candidate
+
+    return {'on': best_on, 'off': best_off}
+
+
+def _time_to_index(time_value, base_time, sample_rate, *, is_end=False, max_index=None):
+    """Convert a timestamp to a discrete sample index using the sample rate."""
+    delta = (time_value - base_time) * sample_rate
+    if is_end:
+        idx = math.ceil(delta)
+    else:
+        idx = math.floor(delta)
+    idx = max(0, int(idx))
+    if max_index is not None:
+        idx = min(max_index, idx)
+    return idx
+
+
+def _process_cycles_chunk(cycle_indices, interp, points_after_interp, r_squared_threshold):
+    """Process a chunk of cycle indices and return fitting summaries."""
+    state = _CYCLE_WORKER_STATE
+    time = state['time']
+    signal = state['signal']
+    sample_rate = state['sample_rate']
+    period = state['period']
+    language = state['language']
+    normalize = state['normalize']
+    window_on_offset = state['window_on_offset']
+    window_on_size = state['window_on_size']
+    window_off_offset = state['window_off_offset']
+    window_off_size = state['window_off_size']
+    auto_tau_params = state['auto_tau_params']
+    base_time = state['base_time']
+
+    max_index = time.shape[0]
+    sample_step = 1.0 / sample_rate if sample_rate != 0 else (time[1] - time[0])
+
+    results = []
+
+    for cycle_index in cycle_indices:
+        cycle_start_time = base_time + cycle_index * period
+        cycle_end_time = cycle_start_time + period
+
+        cycle_start_idx = _time_to_index(cycle_start_time, base_time, sample_rate, max_index=max_index)
+        cycle_end_idx = _time_to_index(cycle_end_time, base_time, sample_rate, is_end=True, max_index=max_index)
+
+        cycle_start_idx = min(cycle_start_idx, max_index - 1)
+        cycle_end_idx = max(cycle_end_idx, cycle_start_idx + 1)
+        cycle_end_idx = min(cycle_end_idx, max_index)
+
+        cycle_time = time[cycle_start_idx:cycle_end_idx]
+        cycle_signal = signal[cycle_start_idx:cycle_end_idx]
+
+        if cycle_time.size < 3:
+            results.append({
+                'status': 'skipped',
+                'cycle': cycle_index + 1,
+                'message': f"周期{cycle_index + 1}的数据点不足。"
+            })
+            continue
+
+        on_start_time = cycle_start_time + window_on_offset
+        on_end_time = on_start_time + window_on_size
+        off_start_time = cycle_start_time + window_off_offset
+        off_end_time = off_start_time + window_off_size
+
+        on_start_idx = _time_to_index(on_start_time, base_time, sample_rate, max_index=max_index)
+        on_end_idx = _time_to_index(on_end_time, base_time, sample_rate, is_end=True, max_index=max_index)
+        off_start_idx = _time_to_index(off_start_time, base_time, sample_rate, max_index=max_index)
+        off_end_idx = _time_to_index(off_end_time, base_time, sample_rate, is_end=True, max_index=max_index)
+
+        on_start_idx_rel = max(0, on_start_idx - cycle_start_idx)
+        on_end_idx_rel = max(on_start_idx_rel + 1, min(cycle_time.size, on_end_idx - cycle_start_idx))
+        off_start_idx_rel = max(0, off_start_idx - cycle_start_idx)
+        off_end_idx_rel = max(off_start_idx_rel + 1, min(cycle_time.size, off_end_idx - cycle_start_idx))
+
+        if (on_end_idx_rel - on_start_idx_rel) < 3 or (off_end_idx_rel - off_start_idx_rel) < 3:
+            results.append({
+                'status': 'skipped',
+                'cycle': cycle_index + 1,
+                'message': f"周期{cycle_index + 1}的数据点不足。"
+            })
+            continue
+
+        tau_fitter = TauFitter(
+            cycle_time,
+            cycle_signal,
+            t_on_idx=[float(on_start_time), float(on_end_time)],
+            t_off_idx=[float(off_start_time), float(off_end_time)],
+            language=language,
+            normalize=normalize,
+        )
+
+        tau_fitter.fit_tau_on(interp=interp, points_after_interp=points_after_interp)
+        tau_fitter.fit_tau_off(interp=interp, points_after_interp=points_after_interp)
+
+        r_squared_on = tau_fitter.tau_on_r_squared
+        r_squared_off = tau_fitter.tau_off_r_squared
+
+        needs_refit_on = r_squared_on is None or r_squared_on < r_squared_threshold
+        needs_refit_off = r_squared_off is None or r_squared_off < r_squared_threshold
+
+        was_refitted = False
+        refit_info = None
+
+        if needs_refit_on or needs_refit_off:
+            if cycle_time.size >= 10:
+                refit_info = {
+                    'cycle': cycle_index + 1,
+                    'original_r_squared_on': r_squared_on,
+                    'original_r_squared_off': r_squared_off,
+                    'refit_types': [],
+                }
+
+                refit_params = dict(auto_tau_params)
+                refit_params.setdefault('show_progress', False)
+
+                cycle_auto_fitter = AutoTauFitter(
+                    cycle_time,
+                    cycle_signal,
+                    sample_step=sample_step,
+                    period=period,
+                    **refit_params,
+                )
+                cycle_auto_fitter.fit_tau_on_and_off(
+                    interp=interp,
+                    points_after_interp=points_after_interp,
+                )
+
+                if needs_refit_on and cycle_auto_fitter.best_tau_on_fitter is not None:
+                    new_fitter = cycle_auto_fitter.best_tau_on_fitter
+                    if new_fitter.tau_on_r_squared is not None and (
+                        r_squared_on is None or new_fitter.tau_on_r_squared > r_squared_on
+                    ):
+                        tau_fitter.tau_on_popt = new_fitter.tau_on_popt
+                        tau_fitter.tau_on_pcov = new_fitter.tau_on_pcov
+                        tau_fitter.tau_on_r_squared = new_fitter.tau_on_r_squared
+                        tau_fitter.tau_on_r_squared_adj = new_fitter.tau_on_r_squared_adj
+                        tau_fitter.t_on_idx = new_fitter.t_on_idx
+                        r_squared_on = tau_fitter.tau_on_r_squared
+                        refit_info['refit_types'].append('on')
+                        refit_info['new_r_squared_on'] = tau_fitter.tau_on_r_squared
+
+                if needs_refit_off and cycle_auto_fitter.best_tau_off_fitter is not None:
+                    new_fitter = cycle_auto_fitter.best_tau_off_fitter
+                    if new_fitter.tau_off_r_squared is not None and (
+                        r_squared_off is None or new_fitter.tau_off_r_squared > r_squared_off
+                    ):
+                        tau_fitter.tau_off_popt = new_fitter.tau_off_popt
+                        tau_fitter.tau_off_pcov = new_fitter.tau_off_pcov
+                        tau_fitter.tau_off_r_squared = new_fitter.tau_off_r_squared
+                        tau_fitter.tau_off_r_squared_adj = new_fitter.tau_off_r_squared_adj
+                        tau_fitter.t_off_idx = new_fitter.t_off_idx
+                        r_squared_off = tau_fitter.tau_off_r_squared
+                        refit_info['refit_types'].append('off')
+                        refit_info['new_r_squared_off'] = tau_fitter.tau_off_r_squared
+
+                if refit_info['refit_types']:
+                    was_refitted = True
+                else:
+                    refit_info = None
+
+        tau_on_value = tau_fitter.get_tau_on()
+        tau_off_value = tau_fitter.get_tau_off()
+
+        result = {
+            'status': 'success',
+            'cycle': cycle_index + 1,
+            'cycle_start_time': float(cycle_start_time),
+            'cycle_start_idx': cycle_start_idx,
+            'cycle_end_idx': cycle_end_idx,
+            'tau_on': float(tau_on_value) if tau_on_value is not None else None,
+            'tau_off': float(tau_off_value) if tau_off_value is not None else None,
+            'tau_on_popt': tuple(map(float, tau_fitter.tau_on_popt)) if tau_fitter.tau_on_popt is not None else None,
+            'tau_off_popt': tuple(map(float, tau_fitter.tau_off_popt)) if tau_fitter.tau_off_popt is not None else None,
+            'tau_on_pcov': tau_fitter.tau_on_pcov.tolist() if tau_fitter.tau_on_pcov is not None else None,
+            'tau_off_pcov': tau_fitter.tau_off_pcov.tolist() if tau_fitter.tau_off_pcov is not None else None,
+            'tau_on_r_squared': float(tau_fitter.tau_on_r_squared) if tau_fitter.tau_on_r_squared is not None else None,
+            'tau_off_r_squared': float(tau_fitter.tau_off_r_squared) if tau_fitter.tau_off_r_squared is not None else None,
+            'tau_on_r_squared_adj': float(tau_fitter.tau_on_r_squared_adj) if tau_fitter.tau_on_r_squared_adj is not None else None,
+            'tau_off_r_squared_adj': float(tau_fitter.tau_off_r_squared_adj) if tau_fitter.tau_off_r_squared_adj is not None else None,
+            'window_on_start_time': float(tau_fitter.t_on_idx[0]) if tau_fitter.t_on_idx else float(on_start_time),
+            'window_on_end_time': float(tau_fitter.t_on_idx[1]) if tau_fitter.t_on_idx else float(on_end_time),
+            'window_off_start_time': float(tau_fitter.t_off_idx[0]) if tau_fitter.t_off_idx else float(off_start_time),
+            'window_off_end_time': float(tau_fitter.t_off_idx[1]) if tau_fitter.t_off_idx else float(off_end_time),
+            'window_on_start_idx': _time_to_index(tau_fitter.t_on_idx[0], base_time, sample_rate, max_index=max_index) if tau_fitter.t_on_idx else on_start_idx,
+            'window_on_end_idx': _time_to_index(tau_fitter.t_on_idx[1], base_time, sample_rate, is_end=True, max_index=max_index) if tau_fitter.t_on_idx else on_end_idx,
+            'window_off_start_idx': _time_to_index(tau_fitter.t_off_idx[0], base_time, sample_rate, max_index=max_index) if tau_fitter.t_off_idx else off_start_idx,
+            'window_off_end_idx': _time_to_index(tau_fitter.t_off_idx[1], base_time, sample_rate, is_end=True, max_index=max_index) if tau_fitter.t_off_idx else off_end_idx,
+            'was_refitted': was_refitted,
+            'refit_info': refit_info,
+        }
+
+        results.append(result)
+
+    return results
 
 class ParallelAutoTauFitter:
     """
@@ -101,7 +475,12 @@ class ParallelAutoTauFitter:
         self.window_length_min = window_scalar_min * self.period
         self.window_length_max = window_scalar_max * self.period
         self.show_progress = show_progress
-        self.max_workers = max_workers if max_workers else multiprocessing.cpu_count()
+        context = _get_mp_context()
+        self._mp_context = context
+        cpu_total = context.cpu_count() if hasattr(context, 'cpu_count') else None
+        if cpu_total is None:
+            cpu_total = max(1, os.cpu_count() or 1)
+        self.max_workers = max_workers if max_workers else cpu_total
 
         self.window_points_step = window_points_step
         self.window_start_idx_step = window_start_idx_step
@@ -117,89 +496,6 @@ class ParallelAutoTauFitter:
         self.best_tau_off_window_end_time = None
         self.best_tau_on_window_size = None
         self.best_tau_off_window_size = None
-
-    def _process_window(self, window_params, interp=True, points_after_interp=100):
-        """
-        处理单个窗口的拟合任务，被并行调用
-        
-        参数:
-        -----
-        window_params : tuple
-            窗口参数 (window_points, start_idx)
-        interp : bool, optional
-            是否使用插值
-        points_after_interp : int, optional
-            插值后的点数
-            
-        返回:
-        -----
-        dict
-            拟合结果字典，包含on和off的拟合结果
-        """
-        window_points, start_idx = window_params
-        end_idx = start_idx + window_points
-        
-        # 提取当前窗口的时间和信号数据
-        window_time = self.time[start_idx:end_idx]
-        window_signal = self.signal[start_idx:end_idx]
-        
-        try:
-            # 尝试拟合on和off过程
-            tau_fitter = TauFitter(
-                window_time,
-                window_signal,
-                t_on_idx=[window_time[0], window_time[-1]],
-                t_off_idx=[window_time[0], window_time[-1]],
-                language=self.language,
-                normalize=self.normalize
-            )
-            
-            tau_fitter.fit_tau_on(interp=interp, points_after_interp=points_after_interp)
-            tau_fitter.fit_tau_off(interp=interp, points_after_interp=points_after_interp)
-            
-            # 收集结果
-            result = {
-                'on': {
-                    'r_squared_adj': tau_fitter.tau_on_r_squared_adj if tau_fitter.tau_on_r_squared_adj is not None else 0,
-                    'window_size': window_points * self.sample_step,
-                    'window_start_time': window_time[0],
-                    'window_end_time': window_time[-1],
-                    'popt': tau_fitter.tau_on_popt,
-                    'fitter': tau_fitter
-                },
-                'off': {
-                    'r_squared_adj': tau_fitter.tau_off_r_squared_adj if tau_fitter.tau_off_r_squared_adj is not None else 0,
-                    'window_size': window_points * self.sample_step,
-                    'window_start_time': window_time[0],
-                    'window_end_time': window_time[-1],
-                    'popt': tau_fitter.tau_off_popt,
-                    'fitter': tau_fitter
-                }
-            }
-            return result
-        except Exception as e:
-            # 拟合失败，返回None
-            return None
-
-    def _process_window_wrapper(self, window_params, interp, points_after_interp):
-        """
-        一个可序列化的普通函数，用于包装_process_window方法
-        
-        参数:
-        -----
-        window_params : tuple
-            窗口参数 (window_points, start_idx)
-        interp : bool
-            是否使用插值
-        points_after_interp : int
-            插值后的点数
-            
-        返回:
-        -----
-        dict
-            拟合结果字典，包含on和off的拟合结果
-        """
-        return self._process_window(window_params, interp, points_after_interp)
 
     def fit_tau_on_and_off(self, interp=True, points_after_interp=100):
         """
@@ -217,24 +513,17 @@ class ParallelAutoTauFitter:
         tuple
             (tau_on_popt, tau_on_r_squared_adj, tau_off_popt, tau_off_r_squared_adj)
         """
-        # 初始化最佳拟合结果
-        best_tau_on = {
-            'r_squared_adj': 0,
-            'window_size': 0,
-            'window_start_time': 0,
-            'window_end_time': 0,
-            'popt': None,
-            'fitter': None
-        }
-        
-        best_tau_off = {
-            'r_squared_adj': 0,
-            'window_size': 0,
-            'window_start_time': 0,
-            'window_end_time': 0,
-            'popt': None,
-            'fitter': None
-        }
+        # 初始化状态
+        best_tau_on = None
+        best_tau_off = None
+        self.best_tau_on_fitter = None
+        self.best_tau_off_fitter = None
+        self.best_tau_on_window_start_time = None
+        self.best_tau_on_window_end_time = None
+        self.best_tau_on_window_size = None
+        self.best_tau_off_window_start_time = None
+        self.best_tau_off_window_end_time = None
+        self.best_tau_off_window_size = None
         
         # 计算窗口大小的点数范围
         min_window_points = int(self.window_length_min / self.sample_step)
@@ -249,71 +538,114 @@ class ParallelAutoTauFitter:
             max_start_idx = len(self.time) - window_points
             for start_idx in range(0, max_start_idx, self.window_start_idx_step):
                 window_params_list.append((window_points, start_idx))
-        
+
         # 显示总任务数
         total_tasks = len(window_params_list)
         if self.show_progress:
             print(f"总共需要处理 {total_tasks} 个窗口拟合任务")
+
+        if not window_params_list:
+            return (None, None, None, None)
         
         # 使用ProcessPoolExecutor并行处理所有窗口
-        with concurrent.futures.ProcessPoolExecutor(max_workers=self.max_workers) as executor:
-            # 使用一个可序列化的普通函数，而不是lambda
-            process_function = self._process_window_wrapper
-            
+        chunk_size = _auto_chunk_size(len(window_params_list), self.max_workers)
+        total_chunks = math.ceil(len(window_params_list) / chunk_size) if chunk_size else 0
+        chunks_iter = _chunk_pairs(window_params_list, chunk_size) if chunk_size else ()
+
+        executor_kwargs = {
+            'max_workers': self.max_workers,
+            'mp_context': self._mp_context,
+            'initializer': _init_window_worker,
+            'initargs': (self.time, self.signal, self.sample_step, self.language, self.normalize),
+        }
+
+        with concurrent.futures.ProcessPoolExecutor(**executor_kwargs) as executor:
+            mapped = executor.map(
+                _process_window_chunk,
+                chunks_iter,
+                repeat(interp),
+                repeat(points_after_interp),
+                chunksize=1,
+            )
+
             if self.show_progress:
-                # 使用tqdm显示进度
-                results = list(tqdm(
-                    executor.map(
-                        process_function, 
-                        window_params_list,
-                        [interp] * len(window_params_list),
-                        [points_after_interp] * len(window_params_list)
-                    ),
-                    total=total_tasks,
-                    desc="并行拟合进度"
-                ))
-            else:
-                # 不显示进度
-                results = list(executor.map(
-                    process_function,
-                    window_params_list,
-                    [interp] * len(window_params_list),
-                    [points_after_interp] * len(window_params_list)
-                ))
-        
-        # 处理结果，找到最佳拟合
-        for result in results:
-            if result is None:
-                continue
-                
-            # 检查on拟合结果
-            on_result = result['on']
-            if on_result['r_squared_adj'] > best_tau_on['r_squared_adj']:
-                best_tau_on = on_result
-            
-            # 检查off拟合结果
-            off_result = result['off']
-            if off_result['r_squared_adj'] > best_tau_off['r_squared_adj']:
-                best_tau_off = off_result
-        
-        # 保存最佳拟合结果到类属性
-        self.best_tau_on_fitter = best_tau_on['fitter']
-        self.best_tau_off_fitter = best_tau_off['fitter']
-        
-        # 保存窗口参数
-        self.best_tau_on_window_start_time = best_tau_on['window_start_time']
-        self.best_tau_on_window_end_time = best_tau_on['window_end_time']
-        self.best_tau_on_window_size = best_tau_on['window_size']
-        
-        self.best_tau_off_window_start_time = best_tau_off['window_start_time']
-        self.best_tau_off_window_end_time = best_tau_off['window_end_time']
-        self.best_tau_off_window_size = best_tau_off['window_size']
-        
+                mapped = tqdm(mapped, total=total_chunks, desc="并行拟合进度")
+
+            for result in mapped:
+                if not result:
+                    continue
+
+                on_result = result.get('on')
+                if on_result is not None and (
+                    best_tau_on is None or on_result['r_squared_adj'] > best_tau_on['r_squared_adj']
+                ):
+                    best_tau_on = on_result
+
+                off_result = result.get('off')
+                if off_result is not None and (
+                    best_tau_off is None or off_result['r_squared_adj'] > best_tau_off['r_squared_adj']
+                ):
+                    best_tau_off = off_result
+
+        if best_tau_on is not None:
+            start_idx = best_tau_on['start_idx']
+            end_idx = best_tau_on['end_idx']
+            window_time = self.time[start_idx:end_idx]
+            window_signal = self.signal[start_idx:end_idx]
+            best_fitter = TauFitter(
+                window_time,
+                window_signal,
+                t_on_idx=[best_tau_on['window_start_time'], best_tau_on['window_end_time']],
+                t_off_idx=[best_tau_on['window_start_time'], best_tau_on['window_end_time']],
+                language=self.language,
+                normalize=self.normalize,
+            )
+            best_fitter.tau_on_popt = np.array(best_tau_on['tau_popt']) if best_tau_on['tau_popt'] is not None else None
+            best_fitter.tau_on_pcov = np.array(best_tau_on['tau_pcov']) if best_tau_on['tau_pcov'] is not None else None
+            best_fitter.tau_on_r_squared = best_tau_on['r_squared']
+            best_fitter.tau_on_r_squared_adj = best_tau_on['r_squared_adj']
+            self.best_tau_on_fitter = best_fitter
+
+            self.best_tau_on_window_start_time = best_tau_on['window_start_time']
+            self.best_tau_on_window_end_time = best_tau_on['window_end_time']
+            self.best_tau_on_window_size = best_tau_on['window_size']
+        else:
+            self.best_tau_on_window_start_time = None
+            self.best_tau_on_window_end_time = None
+            self.best_tau_on_window_size = None
+
+        if best_tau_off is not None:
+            start_idx = best_tau_off['start_idx']
+            end_idx = best_tau_off['end_idx']
+            window_time = self.time[start_idx:end_idx]
+            window_signal = self.signal[start_idx:end_idx]
+            best_fitter = TauFitter(
+                window_time,
+                window_signal,
+                t_on_idx=[best_tau_off['window_start_time'], best_tau_off['window_end_time']],
+                t_off_idx=[best_tau_off['window_start_time'], best_tau_off['window_end_time']],
+                language=self.language,
+                normalize=self.normalize,
+            )
+            best_fitter.tau_off_popt = np.array(best_tau_off['tau_popt']) if best_tau_off['tau_popt'] is not None else None
+            best_fitter.tau_off_pcov = np.array(best_tau_off['tau_pcov']) if best_tau_off['tau_pcov'] is not None else None
+            best_fitter.tau_off_r_squared = best_tau_off['r_squared']
+            best_fitter.tau_off_r_squared_adj = best_tau_off['r_squared_adj']
+            self.best_tau_off_fitter = best_fitter
+
+            self.best_tau_off_window_start_time = best_tau_off['window_start_time']
+            self.best_tau_off_window_end_time = best_tau_off['window_end_time']
+            self.best_tau_off_window_size = best_tau_off['window_size']
+        else:
+            self.best_tau_off_window_start_time = None
+            self.best_tau_off_window_end_time = None
+            self.best_tau_off_window_size = None
+
         return (
-            best_tau_on['popt'], 
-            best_tau_on['r_squared_adj'], 
-            best_tau_off['popt'], 
-            best_tau_off['r_squared_adj']
+            np.array(best_tau_on['tau_popt']) if best_tau_on is not None else None,
+            best_tau_on['r_squared_adj'] if best_tau_on is not None else None,
+            np.array(best_tau_off['tau_popt']) if best_tau_off is not None else None,
+            best_tau_off['r_squared_adj'] if best_tau_off is not None else None,
         )
 
 
@@ -402,10 +734,16 @@ class ParallelCyclesAutoTauFitter:
         self.signal = np.array(signal)
         self.period = period
         self.sample_rate = sample_rate
-        self.auto_tau_fitter_params = kwargs
-        self.max_workers = kwargs.get('max_workers', multiprocessing.cpu_count())
-        self.show_progress = kwargs.get('show_progress', False)
-        self.language = kwargs.get('language', 'en')
+        self.auto_tau_fitter_params = dict(kwargs)
+        context = _get_mp_context()
+        self._mp_context = context
+        cpu_total = context.cpu_count() if hasattr(context, 'cpu_count') else None
+        if cpu_total is None:
+            cpu_total = max(1, os.cpu_count() or 1)
+        self.max_workers = self.auto_tau_fitter_params.pop('max_workers', kwargs.get('max_workers', cpu_total))
+        self.show_progress = self.auto_tau_fitter_params.get('show_progress', kwargs.get('show_progress', False))
+        self.language = self.auto_tau_fitter_params.get('language', kwargs.get('language', 'en'))
+        self.normalize = self.auto_tau_fitter_params.get('normalize', kwargs.get('normalize', False))
         
         # 结果存储
         self.cycle_results = []
@@ -419,12 +757,6 @@ class ParallelCyclesAutoTauFitter:
         self.window_off_size = None
         self.initial_auto_fitter = None
         
-        # 确保传递给下层类的参数中删除max_workers
-        if 'max_workers' in self.auto_tau_fitter_params:
-            self.parallel_params = self.auto_tau_fitter_params.copy()
-        else:
-            self.parallel_params = self.auto_tau_fitter_params
-
         # 语言字典
         self.text = {
             'cn': {
@@ -542,165 +874,6 @@ class ParallelCyclesAutoTauFitter:
 
         return auto_fitter
     
-    def _process_cycle(self, cycle_data):
-        """
-        处理单个周期的拟合任务，被并行调用
-        
-        参数:
-        -----
-        cycle_data : dict
-            周期数据，包含:
-            - cycle_index: 周期索引
-            - t_on_idx: 开启窗口 [开始时间, 结束时间]
-            - t_off_idx: 关闭窗口 [开始时间, 结束时间]
-            - time: 时间数据
-            - signal: 信号数据
-            - interp: 是否使用插值
-            - points_after_interp: 插值后点数
-            - r_squared_threshold: R²阈值
-            
-        返回:
-        -----
-        dict
-            周期处理结果
-        """
-        i = cycle_data['cycle_index']
-        on_window_start, on_window_end = cycle_data['t_on_idx']
-        off_window_start, off_window_end = cycle_data['t_off_idx']
-        time = cycle_data['time']
-        signal = cycle_data['signal']
-        interp = cycle_data['interp']
-        points_after_interp = cycle_data['points_after_interp']
-        r_squared_threshold = cycle_data['r_squared_threshold']
-        auto_tau_fitter_params = cycle_data['auto_tau_fitter_params']
-        cycle_start_time = cycle_data['cycle_start_time']
-        
-        # 创建窗口的掩码
-        on_mask = (time >= on_window_start) & (time <= on_window_end)
-        off_mask = (time >= off_window_start) & (time <= off_window_end)
-
-        # 检查是否有足够的数据点
-        if np.sum(on_mask) < 3 or np.sum(off_mask) < 3:
-            return {
-                'status': 'skipped',
-                'message': f"周期{i+1}的数据点不足。"
-            }
-
-        # 为此周期创建一个TauFitter
-        tau_fitter = TauFitter(
-            time,
-            signal,
-            t_on_idx=[on_window_start, on_window_end],
-            t_off_idx=[off_window_start, off_window_end],
-            **{k: v for k, v in auto_tau_fitter_params.items() if k in ['normalize', 'language']}
-        )
-
-        # 用指定的插值设置拟合数据
-        tau_fitter.fit_tau_on(interp=interp, points_after_interp=points_after_interp)
-        tau_fitter.fit_tau_off(interp=interp, points_after_interp=points_after_interp)
-
-        # 检查拟合是否足够好(R² > 阈值)
-        r_squared_on = tau_fitter.tau_on_r_squared
-        r_squared_off = tau_fitter.tau_off_r_squared
-
-        needs_refitting = False
-        refit_type = []
-        refit_info = None
-
-        if r_squared_on < r_squared_threshold:
-            needs_refitting = True
-            refit_type.append('on')
-
-        if r_squared_off < r_squared_threshold:
-            needs_refitting = True
-            refit_type.append('off')
-
-        # 如果拟合质量不佳，尝试为此特定周期找到更好的窗口
-        if needs_refitting:
-            # 定义包含此周期加上一些余量的时间窗口
-            cycle_start = cycle_start_time
-            cycle_end = cycle_start_time + cycle_data['period']
-
-            # 确保不超出边界
-            cycle_start = max(cycle_start, time[0])
-            cycle_end = min(cycle_end, time[-1])
-
-            # 提取此周期的数据
-            cycle_mask = (time >= cycle_start) & (time <= cycle_end)
-            cycle_time = time[cycle_mask]
-            cycle_signal = signal[cycle_mask]
-
-            # 确保有足够的数据点
-            if len(cycle_time) < 10:  # 最小值
-                # 使用原始拟合
-                pass
-            else:
-                # 记录重新拟合信息
-                refit_info = {
-                    'cycle': i + 1,
-                    'original_r_squared_on': r_squared_on,
-                    'original_r_squared_off': r_squared_off,
-                    'refit_types': refit_type,
-                }
-
-                # 使用AutoTauFitter为这个周期找到更好的窗口
-                cycle_auto_fitter = AutoTauFitter(
-                    cycle_time,
-                    cycle_signal,
-                    sample_step=1/cycle_data['sample_rate'],
-                    period=cycle_data['period'],
-                    **{k: v for k, v in auto_tau_fitter_params.items() 
-                       if k not in ['max_workers']}
-                )
-
-                cycle_auto_fitter.fit_tau_on_and_off(interp=interp, points_after_interp=points_after_interp)
-
-                # 检查并应用更好的开启拟合（如果需要）
-                if 'on' in refit_type:
-                    new_r_squared_on = cycle_auto_fitter.best_tau_on_fitter.tau_on_r_squared if cycle_auto_fitter.best_tau_on_fitter else 0
-
-                    if new_r_squared_on > r_squared_on:
-                        tau_fitter.tau_on_popt = cycle_auto_fitter.best_tau_on_fitter.tau_on_popt
-                        tau_fitter.tau_on_pcov = cycle_auto_fitter.best_tau_on_fitter.tau_on_pcov
-                        tau_fitter.tau_on_r_squared = new_r_squared_on
-                        tau_fitter.tau_on_r_squared_adj = cycle_auto_fitter.best_tau_on_fitter.tau_on_r_squared_adj
-                        refit_info['new_r_squared_on'] = new_r_squared_on
-                    else:
-                        refit_info['new_r_squared_on'] = r_squared_on
-
-                # 检查并应用更好的关闭拟合（如果需要）
-                if 'off' in refit_type:
-                    new_r_squared_off = cycle_auto_fitter.best_tau_off_fitter.tau_off_r_squared if cycle_auto_fitter.best_tau_off_fitter else 0
-
-                    if new_r_squared_off > r_squared_off:
-                        tau_fitter.tau_off_popt = cycle_auto_fitter.best_tau_off_fitter.tau_off_popt
-                        tau_fitter.tau_off_pcov = cycle_auto_fitter.best_tau_off_fitter.tau_off_pcov
-                        tau_fitter.tau_off_r_squared = new_r_squared_off
-                        tau_fitter.tau_off_r_squared_adj = cycle_auto_fitter.best_tau_off_fitter.tau_off_r_squared_adj
-                        refit_info['new_r_squared_off'] = new_r_squared_off
-                    else:
-                        refit_info['new_r_squared_off'] = r_squared_off
-
-        # 存储结果
-        result = {
-            'status': 'success',
-            'cycle': i + 1,
-            'cycle_start_time': cycle_start_time,
-            'tau_on': tau_fitter.get_tau_on(),
-            'tau_off': tau_fitter.get_tau_off(),
-            'tau_on_popt': tau_fitter.tau_on_popt,
-            'tau_off_popt': tau_fitter.tau_off_popt,
-            'tau_on_r_squared': tau_fitter.tau_on_r_squared,
-            'tau_off_r_squared': tau_fitter.tau_off_r_squared,
-            'tau_on_r_squared_adj': tau_fitter.tau_on_r_squared_adj,
-            'tau_off_r_squared_adj': tau_fitter.tau_off_r_squared_adj,
-            'fitter': tau_fitter,
-            'was_refitted': needs_refitting,
-            'refit_info': refit_info
-        }
-
-        return result
-    
     def fit_all_cycles(self, interp=True, points_after_interp=100, r_squared_threshold=0.95):
         """
         使用并行处理拟合所有周期的tau值
@@ -726,73 +899,79 @@ class ParallelCyclesAutoTauFitter:
             # 如果尚未找到窗口，找到它们
             self.find_best_windows(interp=interp, points_after_interp=points_after_interp)
 
+        if any(value is None for value in [
+            self.window_on_offset,
+            self.window_on_size,
+            self.window_off_offset,
+            self.window_off_size,
+        ]):
+            raise RuntimeError("Failed to determine valid on/off windows before cycle fitting.")
+
         # 计算数据中完整周期的数量
         total_time = self.time[-1] - self.time[0]
         num_cycles = int(total_time / self.period)
 
-        # 准备每个周期的处理参数
-        cycles_data = []
-        for i in range(num_cycles):
-            cycle_start_time = self.time[0] + i * self.period
+        if num_cycles <= 0:
+            self.cycle_results = []
+            self.refitted_cycles = []
+            return self.cycle_results
 
-            # 计算此周期的窗口开始和结束时间
-            on_window_start = cycle_start_time + self.window_on_offset
-            on_window_end = on_window_start + self.window_on_size
+        chunk_size = _auto_chunk_size(num_cycles, self.max_workers, min_chunk=32)
+        total_chunks = math.ceil(num_cycles / chunk_size)
+        chunk_indices_iter = _chunk_sequence(num_cycles, chunk_size)
 
-            off_window_start = cycle_start_time + self.window_off_offset
-            off_window_end = off_window_start + self.window_off_size
-
-            # 创建周期数据字典
-            cycle_data = {
-                'cycle_index': i,
-                'cycle_start_time': cycle_start_time,
-                't_on_idx': [on_window_start, on_window_end],
-                't_off_idx': [off_window_start, off_window_end],
-                'time': self.time,
-                'signal': self.signal,
-                'interp': interp,
-                'points_after_interp': points_after_interp,
-                'r_squared_threshold': r_squared_threshold,
-                'auto_tau_fitter_params': self.auto_tau_fitter_params,
-                'sample_rate': self.sample_rate,
-                'period': self.period
-            }
-            cycles_data.append(cycle_data)
-
-        # 重置结果存储
         self.cycle_results = []
         self.refitted_cycles = []
 
-        # 使用ProcessPoolExecutor并行处理所有周期
-        with concurrent.futures.ProcessPoolExecutor(max_workers=self.max_workers) as executor:
-            if self.show_progress:
-                # 使用tqdm显示进度
-                futures = list(tqdm(
-                    executor.map(self._process_cycle, cycles_data),
-                    total=len(cycles_data),
-                    desc="并行处理周期"
-                ))
-            else:
-                # 不显示进度
-                futures = list(executor.map(self._process_cycle, cycles_data))
+        executor_kwargs = {
+            'max_workers': self.max_workers,
+            'mp_context': self._mp_context,
+            'initializer': _init_cycle_worker,
+            'initargs': (
+                self.time,
+                self.signal,
+                self.sample_rate,
+                self.period,
+                self.language,
+                self.normalize,
+                self.window_on_offset,
+                self.window_on_size,
+                self.window_off_offset,
+                self.window_off_size,
+                dict(self.auto_tau_fitter_params),
+                float(self.time[0]),
+            ),
+        }
 
-        # 处理结果
-        for result in futures:
-            if result['status'] == 'skipped':
-                if self.show_progress:
-                    print(result['message'])
-                continue
-            
-            # 添加到结果列表
-            self.cycle_results.append(result)
-            
-            # 如果重新拟合过，添加到重新拟合列表
-            if result['was_refitted'] and result['refit_info'] is not None:
-                self.refitted_cycles.append(result['refit_info'])
-                
-        # 按周期排序结果
+        with concurrent.futures.ProcessPoolExecutor(**executor_kwargs) as executor:
+            mapped = executor.map(
+                _process_cycles_chunk,
+                chunk_indices_iter,
+                repeat(interp),
+                repeat(points_after_interp),
+                repeat(r_squared_threshold),
+                chunksize=1,
+            )
+
+            if self.show_progress:
+                mapped = tqdm(mapped, total=total_chunks, desc="并行处理周期")
+
+            for batch in mapped:
+                if not batch:
+                    continue
+                for result in batch:
+                    if result['status'] == 'skipped':
+                        if self.show_progress and result.get('message'):
+                            print(result['message'])
+                        continue
+
+                    self.cycle_results.append(result)
+
+                    if result.get('was_refitted') and result.get('refit_info') is not None:
+                        self.refitted_cycles.append(result['refit_info'])
+
         self.cycle_results.sort(key=lambda x: x['cycle'])
-                
+
         return self.cycle_results
 
     # 后续方法与CyclesAutoTauFitter相同，可直接复用
@@ -824,12 +1003,12 @@ class ParallelCyclesAutoTauFitter:
         for res in self.cycle_results:
             data['cycle'].append(res['cycle'])
             data['cycle_start_time'].append(res['cycle_start_time'])
-            data['tau_on'].append(res['tau_on'])
-            data['tau_off'].append(res['tau_off'])
-            data['r_squared_on'].append(res['tau_on_r_squared'])
-            data['r_squared_off'].append(res['tau_off_r_squared'])
-            data['r_squared_adj_on'].append(res['tau_on_r_squared_adj'])
-            data['r_squared_adj_off'].append(res['tau_off_r_squared_adj'])
+            data['tau_on'].append(res['tau_on'] if res['tau_on'] is not None else np.nan)
+            data['tau_off'].append(res['tau_off'] if res['tau_off'] is not None else np.nan)
+            data['r_squared_on'].append(res['tau_on_r_squared'] if res['tau_on_r_squared'] is not None else np.nan)
+            data['r_squared_off'].append(res['tau_off_r_squared'] if res['tau_off_r_squared'] is not None else np.nan)
+            data['r_squared_adj_on'].append(res['tau_on_r_squared_adj'] if res['tau_on_r_squared_adj'] is not None else np.nan)
+            data['r_squared_adj_off'].append(res['tau_off_r_squared_adj'] if res['tau_off_r_squared_adj'] is not None else np.nan)
             data['was_refitted'].append(res.get('was_refitted', False))
 
         return pd.DataFrame(data)
@@ -865,8 +1044,8 @@ class ParallelCyclesAutoTauFitter:
             return
 
         cycles = [res['cycle'] for res in self.cycle_results]
-        tau_on_values = [res['tau_on'] for res in self.cycle_results]
-        tau_off_values = [res['tau_off'] for res in self.cycle_results]
+        tau_on_values = [res['tau_on'] if res['tau_on'] is not None else np.nan for res in self.cycle_results]
+        tau_off_values = [res['tau_off'] if res['tau_off'] is not None else np.nan for res in self.cycle_results]
 
         refitted_indices = [i for i, res in enumerate(self.cycle_results) if res.get('was_refitted', False)]
         refitted_cycles = [cycles[i] for i in refitted_indices]
@@ -1057,6 +1236,49 @@ class ParallelCyclesAutoTauFitter:
             plt.axvspan(on_window_start, on_window_end, alpha=0.2, color='green')
             plt.axvspan(off_window_start, off_window_end, alpha=0.2, color='red')
 
+    def _build_cycle_fitter_from_result(self, result):
+        """Construct a TauFitter instance for plotting based on stored summary data."""
+        cycle_start_idx = result.get('cycle_start_idx')
+        cycle_end_idx = result.get('cycle_end_idx')
+        if cycle_start_idx is None or cycle_end_idx is None:
+            return None
+
+        cycle_time = self.time[cycle_start_idx:cycle_end_idx]
+        cycle_signal = self.signal[cycle_start_idx:cycle_end_idx]
+
+        if cycle_time.size < 3:
+            return None
+
+        window_on_start_time = result.get('window_on_start_time')
+        window_on_end_time = result.get('window_on_end_time')
+        window_off_start_time = result.get('window_off_start_time')
+        window_off_end_time = result.get('window_off_end_time')
+
+        tau_fitter = TauFitter(
+            cycle_time,
+            cycle_signal,
+            t_on_idx=[window_on_start_time, window_on_end_time] if window_on_start_time is not None and window_on_end_time is not None else None,
+            t_off_idx=[window_off_start_time, window_off_end_time] if window_off_start_time is not None and window_off_end_time is not None else None,
+            language=self.language,
+            normalize=self.normalize,
+        )
+
+        if result.get('tau_on_popt') is not None:
+            tau_fitter.tau_on_popt = np.array(result['tau_on_popt'])
+        if result.get('tau_off_popt') is not None:
+            tau_fitter.tau_off_popt = np.array(result['tau_off_popt'])
+        if result.get('tau_on_pcov') is not None:
+            tau_fitter.tau_on_pcov = np.array(result['tau_on_pcov'])
+        if result.get('tau_off_pcov') is not None:
+            tau_fitter.tau_off_pcov = np.array(result['tau_off_pcov'])
+
+        tau_fitter.tau_on_r_squared = result.get('tau_on_r_squared')
+        tau_fitter.tau_on_r_squared_adj = result.get('tau_on_r_squared_adj')
+        tau_fitter.tau_off_r_squared = result.get('tau_off_r_squared')
+        tau_fitter.tau_off_r_squared_adj = result.get('tau_off_r_squared_adj')
+
+        return tau_fitter
+
     def plot_all_fits(self, start_cycle=0, num_cycles=None, figsize=(15, 10)):
         """
         绘制所有或选定周期的拟合结果
@@ -1108,15 +1330,24 @@ class ParallelCyclesAutoTauFitter:
 
             # 获取周期结果
             result = self.cycle_results[cycle_idx]
-            fitter = result['fitter']
+            fitter = self._build_cycle_fitter_from_result(result)
+            if fitter is None or fitter.tau_on_popt is None or fitter.tau_off_popt is None:
+                axes[i, 0].axis('off')
+                axes[i, 1].axis('off')
+                continue
             was_refitted = result.get('was_refitted', False)
 
             # 绘制开启拟合
             ax_on = axes[i, 0]
 
-            mask_on = (self.time >= fitter.t_on_idx[0]) & (self.time <= fitter.t_on_idx[1])
-            t_on = self.time[mask_on]
-            s_on = self.signal[mask_on]
+            on_start_idx = result.get('window_on_start_idx')
+            on_end_idx = result.get('window_on_end_idx')
+            if on_start_idx is None or on_end_idx is None or on_end_idx - on_start_idx < 2:
+                axes[i, 0].axis('off')
+                axes[i, 1].axis('off')
+                continue
+            t_on = self.time[on_start_idx:on_end_idx]
+            s_on = self.signal[on_start_idx:on_end_idx]
 
             ax_on.plot(t_on, s_on, 'o', label=self.text[self.language]['data'])
             t_fit = np.linspace(t_on[0], t_on[-1], 100)
@@ -1136,9 +1367,14 @@ class ParallelCyclesAutoTauFitter:
             # 绘制关闭拟合
             ax_off = axes[i, 1]
 
-            mask_off = (self.time >= fitter.t_off_idx[0]) & (self.time <= fitter.t_off_idx[1])
-            t_off = self.time[mask_off]
-            s_off = self.signal[mask_off]
+            off_start_idx = result.get('window_off_start_idx')
+            off_end_idx = result.get('window_off_end_idx')
+            if off_start_idx is None or off_end_idx is None or off_end_idx - off_start_idx < 2:
+                axes[i, 0].axis('off')
+                axes[i, 1].axis('off')
+                continue
+            t_off = self.time[off_start_idx:off_end_idx]
+            s_off = self.signal[off_start_idx:off_end_idx]
 
             ax_off.plot(t_off, s_off, 'o', label=self.text[self.language]['data'])
             t_fit = np.linspace(t_off[0], t_off[-1], 100)

@@ -25,4 +25,6 @@ ENV/
 
 # 操作系统文件
 .DS_Store
-Thumbs.db 
+Thumbs.db # Python virtual environment
+.venv/
+venv/

@@ -7,7 +7,10 @@ long_description = (here / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="autotau",
-    version="0.3.0",
+<<<<<<< HEAD
+    version="0.3.1",
+    version="0.3.1",
+>>>>>>> 7131689 (feat: improve parallel processing and plotting in autotau)
     packages=find_packages(),
     install_requires=[
         "numpy>=1.18.0",

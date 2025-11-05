@@ -364,14 +364,14 @@ class CyclesAutoTauFitter:
 
                     # 检查并应用更好的开启拟合（如果需要）
                     if 'on' in refit_type:
-                        new_r_squared_on = cycle_auto_fitter.best_tau_on_fitter.tau_on_r_squared if cycle_auto_fitter.best_tau_on_fitter else 0
-
-                        if new_r_squared_on > r_squared_on:
+                        best_tau_on_fitter = cycle_auto_fitter.best_tau_on_fitter
+                        if best_tau_on_fitter and best_tau_on_fitter.tau_on_r_squared > r_squared_on:
+                            new_r_squared_on = best_tau_on_fitter.tau_on_r_squared
                             print(f"  找到更好的开启过渡拟合: R²从{r_squared_on:.3f}提高到{new_r_squared_on:.3f}")
-                            tau_fitter.tau_on_popt = cycle_auto_fitter.best_tau_on_fitter.tau_on_popt
-                            tau_fitter.tau_on_pcov = cycle_auto_fitter.best_tau_on_fitter.tau_on_pcov
+                            tau_fitter.tau_on_popt = best_tau_on_fitter.tau_on_popt
+                            tau_fitter.tau_on_pcov = best_tau_on_fitter.tau_on_pcov
                             tau_fitter.tau_on_r_squared = new_r_squared_on
-                            tau_fitter.tau_on_r_squared_adj = cycle_auto_fitter.best_tau_on_fitter.tau_on_r_squared_adj
+                            tau_fitter.tau_on_r_squared_adj = best_tau_on_fitter.tau_on_r_squared_adj
                             refit_info['new_r_squared_on'] = new_r_squared_on
                         else:
                             print(f"  无法找到更好的开启过渡拟合。保留原始拟合。")
@@ -379,14 +379,14 @@ class CyclesAutoTauFitter:
 
                     # 检查并应用更好的关闭拟合（如果需要）
                     if 'off' in refit_type:
-                        new_r_squared_off = cycle_auto_fitter.best_tau_off_fitter.tau_off_r_squared if cycle_auto_fitter.best_tau_off_fitter else 0
-
-                        if new_r_squared_off > r_squared_off:
+                        best_tau_off_fitter = cycle_auto_fitter.best_tau_off_fitter
+                        if best_tau_off_fitter and best_tau_off_fitter.tau_off_r_squared > r_squared_off:
+                            new_r_squared_off = best_tau_off_fitter.tau_off_r_squared
                             print(f"  找到更好的关闭过渡拟合: R²从{r_squared_off:.3f}提高到{new_r_squared_off:.3f}")
-                            tau_fitter.tau_off_popt = cycle_auto_fitter.best_tau_off_fitter.tau_off_popt
-                            tau_fitter.tau_off_pcov = cycle_auto_fitter.best_tau_off_fitter.tau_off_pcov
+                            tau_fitter.tau_off_popt = best_tau_off_fitter.tau_off_popt
+                            tau_fitter.tau_off_pcov = best_tau_off_fitter.tau_off_pcov
                             tau_fitter.tau_off_r_squared = new_r_squared_off
-                            tau_fitter.tau_off_r_squared_adj = cycle_auto_fitter.best_tau_off_fitter.tau_off_r_squared_adj
+                            tau_fitter.tau_off_r_squared_adj = best_tau_off_fitter.tau_off_r_squared_adj
                             refit_info['new_r_squared_off'] = new_r_squared_off
                         else:
                             print(f"  无法找到更好的关闭过渡拟合。保留原始拟合。")
