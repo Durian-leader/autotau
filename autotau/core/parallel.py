@@ -480,7 +480,7 @@ class ParallelAutoTauFitter:
         cpu_total = context.cpu_count() if hasattr(context, 'cpu_count') else None
         if cpu_total is None:
             cpu_total = max(1, os.cpu_count() or 1)
-        self.max_workers = max_workers if max_workers else cpu_total
+        self.max_workers = max_workers if max_workers is not None else cpu_total
 
         self.window_points_step = window_points_step
         self.window_start_idx_step = window_start_idx_step
@@ -740,7 +740,8 @@ class ParallelCyclesAutoTauFitter:
         cpu_total = context.cpu_count() if hasattr(context, 'cpu_count') else None
         if cpu_total is None:
             cpu_total = max(1, os.cpu_count() or 1)
-        self.max_workers = self.auto_tau_fitter_params.pop('max_workers', kwargs.get('max_workers', cpu_total))
+        max_workers_value = self.auto_tau_fitter_params.pop('max_workers', kwargs.get('max_workers', None))
+        self.max_workers = max_workers_value if max_workers_value is not None else cpu_total
         self.show_progress = self.auto_tau_fitter_params.get('show_progress', kwargs.get('show_progress', False))
         self.language = self.auto_tau_fitter_params.get('language', kwargs.get('language', 'en'))
         self.normalize = self.auto_tau_fitter_params.get('normalize', kwargs.get('normalize', False))
