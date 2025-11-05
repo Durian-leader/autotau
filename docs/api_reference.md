@@ -151,3 +151,33 @@ parallel_cycles_fitter = ParallelCyclesAutoTauFitter(
     max_workers=None  # 使用所有可用CPU核心
 )
 ``` 
+
+### ParallelCyclesTauFitter
+
+使用手动指定窗口参数的多周期并行拟合器（按分块并行处理）。
+
+```python
+from autotau import ParallelCyclesTauFitter
+
+fitter = ParallelCyclesTauFitter(
+    time_data,
+    signal_data,
+    period=0.2,
+    sample_rate=1000,
+    window_on_offset=1.5,
+    window_on_size=0.05,
+    window_off_offset=0.35,
+    window_off_size=0.06,
+    normalize=False,
+    language='cn',
+    show_progress=True,
+    max_workers=None  # 使用所有可用CPU核心
+)
+
+results = fitter.fit_all_cycles()
+```
+
+说明：
+- 采用分块（chunked）并行：每个进程处理一组周期索引，避免“每周期一个任务”的高调度与序列化开销。
+- 分块大小自动估计并随 `max_workers` 调整，通常无需额外参数即可获得良好吞吐。
+- 返回结果结构与 `CyclesTauFitter` 保持一致，包含每周期的 `fitter` 与 R² 指标，可直接复用绘图与汇总方法。

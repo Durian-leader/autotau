@@ -265,6 +265,29 @@ parallel_cycles_fitter = ParallelCyclesAutoTauFitter(
 parallel_cycles_fitter.fit_all_cycles()
 ```
 
+提示：如果你已知窗口参数，推荐使用 `ParallelCyclesTauFitter` 进行多周期并行拟合。该实现采用“分块并行”（每个进程处理一组周期）来降低调度与序列化开销，在周期数较多时拥有更好的吞吐与扩展性。
+
+示例（手动窗口并行）：
+
+```python
+from autotau import ParallelCyclesTauFitter
+
+fitter = ParallelCyclesTauFitter(
+    time_data,
+    current_data,
+    period=0.2,
+    sample_rate=1000,
+    window_on_offset=1.5,
+    window_on_size=0.05,
+    window_off_offset=0.35,
+    window_off_size=0.06,
+    show_progress=True,
+    max_workers=8
+)
+
+results = fitter.fit_all_cycles()
+```
+
 ## 性能对比
 
 ### v0.3.0 性能测试结果（实测）

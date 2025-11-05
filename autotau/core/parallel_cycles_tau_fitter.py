@@ -4,7 +4,15 @@ import multiprocessing
 import pandas as pd
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from itertools import repeat
 from .tau_fitter import TauFitter
+from .parallel import (
+    _get_mp_context,
+    _auto_chunk_size,
+    _chunk_sequence,
+    _init_cycle_worker,
+    _process_cycles_chunk,
+)
 
 
 class ParallelCyclesTauFitter:
@@ -60,6 +68,8 @@ class ParallelCyclesTauFitter:
         self.language = language
         self.show_progress = show_progress
         self.max_workers = max_workers if max_workers else multiprocessing.cpu_count()
+        # 使用与并行模块一致的多进程上下文（优先 fork，有利于性能）
+        self._mp_context = _get_mp_context()
 
         # 结果存储
         self.cycle_results = []
@@ -196,7 +206,7 @@ class ParallelCyclesTauFitter:
 
     def fit_all_cycles(self, interp=True, points_after_interp=100):
         """
-        使用并行处理拟合所有周期的tau值
+        使用分块并行处理拟合所有周期的tau值（每个进程处理一组周期，降低调度与序列化开销）
 
         参数:
         -----
@@ -210,66 +220,108 @@ class ParallelCyclesTauFitter:
         list of dict
             包含每个周期拟合结果的列表
         """
-        # 计算数据中完整周期的数量
-        total_time = self.time[-1] - self.time[0]
-        num_cycles = int(total_time / self.period)
+        # 计算完整周期数量
+        total_time = float(self.time[-1] - self.time[0])
+        num_cycles = int(total_time / float(self.period))
 
-        # 准备每个周期的处理参数
-        cycles_data = []
-        for i in range(num_cycles):
-            cycle_start_time = self.time[0] + i * self.period
+        if num_cycles <= 0:
+            self.cycle_results = []
+            return self.cycle_results
 
-            # 计算此周期的窗口开始和结束时间
-            on_window_start = cycle_start_time + self.window_on_offset
-            on_window_end = on_window_start + self.window_on_size
+        # 计算合理的分块大小（与 parallel.py 保持一致的策略）
+        chunk_size = _auto_chunk_size(num_cycles, self.max_workers)
+        chunks = list(_chunk_sequence(num_cycles, chunk_size))
 
-            off_window_start = cycle_start_time + self.window_off_offset
-            off_window_end = off_window_start + self.window_off_size
-
-            # 创建周期数据字典
-            cycle_data = {
-                'cycle_index': i,
-                'cycle_start_time': cycle_start_time,
-                't_on_idx': [on_window_start, on_window_end],
-                't_off_idx': [off_window_start, off_window_end],
-                'time': self.time,
-                'signal': self.signal,
-                'interp': interp,
-                'points_after_interp': points_after_interp,
-                'normalize': self.normalize,
-                'language': self.language
-            }
-            cycles_data.append(cycle_data)
-
-        # 重置结果存储
+        # 重置结果
         self.cycle_results = []
 
-        # 使用ProcessPoolExecutor并行处理所有周期
-        with concurrent.futures.ProcessPoolExecutor(max_workers=self.max_workers) as executor:
+        # 初始化每个进程的只读共享状态，避免为每个周期重复序列化大数组
+        base_time = float(self.time[0])
+        init_args = (
+            self.time,
+            self.signal,
+            float(self.sample_rate),
+            float(self.period),
+            self.language,
+            bool(self.normalize),
+            float(self.window_on_offset),
+            float(self.window_on_size),
+            float(self.window_off_offset),
+            float(self.window_off_size),
+            {},                 # auto_tau_params（此类不启用自动重拟合）
+            base_time,
+        )
+
+        # 使用 ProcessPoolExecutor + initializer, 每个任务是一组周期索引
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=self.max_workers,
+            mp_context=self._mp_context,
+            initializer=_init_cycle_worker,
+            initargs=init_args,
+        ) as executor:
+            mapped = executor.map(
+                _process_cycles_chunk,
+                chunks,
+                repeat(bool(interp)),
+                repeat(int(points_after_interp)),
+                repeat(-1.0),  # r_squared_threshold（给负值可有效关闭重拟合）
+            )
+
+            # 进度包装
             if self.show_progress:
-                # 使用tqdm显示进度
-                futures = list(tqdm(
-                    executor.map(self._process_cycle, cycles_data),
-                    total=len(cycles_data),
-                    desc="Parallel fitting cycles"
-                ))
-            else:
-                # 不显示进度
-                futures = list(executor.map(self._process_cycle, cycles_data))
+                mapped = tqdm(mapped, total=len(chunks), desc="Parallel fitting cycles (chunked)")
 
-        # 处理结果
-        for result in futures:
-            if result['status'] == 'skipped':
-                if self.show_progress:
-                    print(result['message'])
-                continue
+            # 扁平化结果并构建与原API兼容的条目（含fitter）
+            flat_results = []
+            for chunk_results in mapped:
+                for r in chunk_results:
+                    if r.get('status') == 'skipped':
+                        if self.show_progress and r.get('message'):
+                            print(r['message'])
+                        continue
+                    flat_results.append(r)
 
-            # 添加到结果列表
-            self.cycle_results.append(result)
+        # 在主进程创建 TauFitter，并填充拟合参数以保持API不变
+        for r in flat_results:
+            fitter = TauFitter(
+                self.time,
+                self.signal,
+                t_on_idx=[r['window_on_start_time'], r['window_on_end_time']],
+                t_off_idx=[r['window_off_start_time'], r['window_off_end_time']],
+                normalize=self.normalize,
+                language=self.language,
+            )
+            # 回填拟合结果（避免重复计算）
+            if r.get('tau_on_popt') is not None:
+                fitter.tau_on_popt = np.array(r['tau_on_popt'])
+            if r.get('tau_on_pcov') is not None:
+                fitter.tau_on_pcov = np.array(r['tau_on_pcov'])
+            if r.get('tau_off_popt') is not None:
+                fitter.tau_off_popt = np.array(r['tau_off_popt'])
+            if r.get('tau_off_pcov') is not None:
+                fitter.tau_off_pcov = np.array(r['tau_off_pcov'])
+            fitter.tau_on_r_squared = r.get('tau_on_r_squared')
+            fitter.tau_off_r_squared = r.get('tau_off_r_squared')
+            fitter.tau_on_r_squared_adj = r.get('tau_on_r_squared_adj')
+            fitter.tau_off_r_squared_adj = r.get('tau_off_r_squared_adj')
 
-        # 按周期排序结果
+            self.cycle_results.append({
+                'status': 'success',
+                'cycle': r['cycle'],
+                'cycle_start_time': r.get('cycle_start_time'),
+                'tau_on': r.get('tau_on'),
+                'tau_off': r.get('tau_off'),
+                'tau_on_popt': fitter.tau_on_popt,
+                'tau_off_popt': fitter.tau_off_popt,
+                'tau_on_r_squared': fitter.tau_on_r_squared,
+                'tau_off_r_squared': fitter.tau_off_r_squared,
+                'tau_on_r_squared_adj': fitter.tau_on_r_squared_adj,
+                'tau_off_r_squared_adj': fitter.tau_off_r_squared_adj,
+                'fitter': fitter,
+            })
+
+        # 按周期排序
         self.cycle_results.sort(key=lambda x: x['cycle'])
-
         return self.cycle_results
 
     def plot_cycle_results(self, figsize=(10, 6), dual_y_axis=True):

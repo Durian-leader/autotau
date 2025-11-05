@@ -330,3 +330,6 @@ print("\nAnalysis complete!")
 
 4. 确保窗口参数不会超出周期范围
    Ensure window parameters do not exceed cycle boundaries
+
+5. ParallelCyclesTauFitter 采用分块并行（每个进程处理一组周期），避免“每周期一个任务”的高开销；通常只需设置 `max_workers` 即可获得良好性能，无需额外并行参数。
+   ParallelCyclesTauFitter uses chunked parallelism (each process handles a group of cycles), avoiding the high overhead of one-task-per-cycle; in most cases setting `max_workers` is sufficient, no extra tuning needed.
