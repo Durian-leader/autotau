@@ -7,7 +7,15 @@
       "Bash(git pull:*)",
       "Bash(python:*)",
       "Bash(git checkout:*)",
-      "Bash(git ls-tree:*)"
+      "Bash(git ls-tree:*)",
+      "Bash(git commit:*)",
+      "Skill(pypi)",
+      "Skill(pypi:*)",
+      "Bash(bash:*)",
+      "Bash(pip install:*)",
+      "Bash(twine upload:*)",
+      "Bash(conda run:*)",
+      "Bash(git push)"
     ],
     "deny": [],
     "ask": []

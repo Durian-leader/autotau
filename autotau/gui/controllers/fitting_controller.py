@@ -12,8 +12,8 @@ from PyQt5.QtCore import QObject, QThread, pyqtSignal
 
 from autotau import (
     CyclesAutoTauFitter,
-    ParallelCyclesTauFitter,
-    WindowFinder
+    CyclesTauFitter,
+    AutoTauFitter
 )
 
 
@@ -131,7 +131,7 @@ class FittingWorker(QObject):
         window_params: ManualWindowParameters
     ):
         """
-        Run manual fitting with ParallelCyclesTauFitter.
+        Run manual fitting with CyclesTauFitter (serial, no multiprocessing).
 
         Args:
             time: Time array
@@ -143,8 +143,8 @@ class FittingWorker(QObject):
         self.started.emit()
 
         try:
-            # Create fitter
-            fitter = ParallelCyclesTauFitter(
+            # Create fitter (serial version to avoid multiprocessing issues in GUI)
+            fitter = CyclesTauFitter(
                 time=time,
                 signal=signal,
                 period=params.period,
@@ -154,16 +154,17 @@ class FittingWorker(QObject):
                 window_off_offset=window_params.window_off_offset,
                 window_off_size=window_params.window_off_size,
                 normalize=params.normalize,
-                language=params.language,
-                show_progress=False,
-                max_workers=params.max_workers
+                language=params.language
             )
 
             if self._is_cancelled:
                 return
 
             # Fit all cycles
-            df = fitter.fit_all_cycles(return_format='dataframe')
+            fitter.fit_all_cycles()
+
+            # Get summary data as DataFrame
+            df = fitter.get_summary_data()
 
             # Store fitter for later use
             self._last_fitter = fitter
@@ -180,7 +181,7 @@ class FittingWorker(QObject):
         params: FittingParameters
     ):
         """
-        Search for optimal windows using WindowFinder.
+        Search for optimal windows using AutoTauFitter (serial, no multiprocessing).
 
         Args:
             time: Time array
@@ -193,8 +194,8 @@ class FittingWorker(QObject):
         try:
             sample_step = 1.0 / params.sample_rate
 
-            # Create finder
-            finder = WindowFinder(
+            # Use AutoTauFitter for window search (serial mode, no executor)
+            auto_fitter = AutoTauFitter(
                 time=time,
                 signal=signal,
                 sample_step=sample_step,
@@ -202,23 +203,23 @@ class FittingWorker(QObject):
                 normalize=params.normalize,
                 language=params.language,
                 show_progress=False,
-                max_workers=params.max_workers
+                executor=None  # Serial mode to avoid multiprocessing issues
             )
 
             if self._is_cancelled:
                 return
 
-            # Find best windows
-            windows = finder.find_best_windows()
+            # Find best windows by fitting
+            auto_fitter.fit_tau_on_and_off()
 
             # Convert to window parameters format
             window_dict = {
-                'on_offset': windows['on']['offset'],
-                'on_size': windows['on']['size'],
-                'off_offset': windows['off']['offset'],
-                'off_size': windows['off']['size'],
-                'on_r2': windows['on']['r_squared_adj'],
-                'off_r2': windows['off']['r_squared_adj'],
+                'on_offset': auto_fitter.best_tau_on_window_start_time - time[0],
+                'on_size': auto_fitter.best_tau_on_window_size,
+                'off_offset': auto_fitter.best_tau_off_window_start_time - time[0],
+                'off_size': auto_fitter.best_tau_off_window_size,
+                'on_r2': auto_fitter.best_tau_on_fitter.tau_on_r_squared_adj if auto_fitter.best_tau_on_fitter else 0,
+                'off_r2': auto_fitter.best_tau_off_fitter.tau_off_r_squared_adj if auto_fitter.best_tau_off_fitter else 0,
             }
 
             self.windows_found.emit(window_dict)
