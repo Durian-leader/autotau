@@ -7,7 +7,7 @@ long_description = (here / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="autotau",
-    version="0.4.5",
+    version="0.5.0",
     packages=find_packages(),
     install_requires=[
         "numpy>=1.18.0",
@@ -16,12 +16,23 @@ setup(
         "pandas>=1.0.0",
         "tqdm>=4.45.0",
     ],
+    extras_require={
+        "gui": [
+            "PyQt5>=5.12.0",
+            "openpyxl>=3.0.0",
+        ],
+    },
+    entry_points={
+        "gui_scripts": [
+            "autotau-gui=autotau.gui.main:main",
+        ],
+    },
     author="Donghao Li",
     author_email="lidonghao100@outlook.com",
     description="Automated time constant (tau) fitting tool with decoupled window search and manual fitting support",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    keywords="tau, fitting, exponential, signal processing, parallel, optimization, numba",
+    keywords="tau, fitting, exponential, signal processing, parallel, optimization, numba, gui",
     url="https://github.com/Durian-Leader/autotau",
     classifiers=[
         "Development Status :: 3 - Alpha",

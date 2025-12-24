@@ -1,250 +1,251 @@
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import time
-from tqdm import tqdm
 import os
 import sys
+import time
 
-# 添加当前目录到系统路径，以便可以导入autotau模块
+import numpy as np
+import pandas as pd
+
+# 添加包根目录到系统路径，便于直接运行示例
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# 导入autotau模块
 from autotau import (
-    TauFitter, 
-    AutoTauFitter, 
+    TauFitter,
+    AutoTauFitter,
     CyclesAutoTauFitter,
-    ParallelAutoTauFitter,
-    ParallelCyclesAutoTauFitter
+    WindowFinder,
+    CyclesTauFitter,
+    ParallelCyclesTauFitter,
 )
 
 
+def load_example_data(file_path="../autotau/transient.csv", time_range=None, max_cycles=None, period=None):
+    """加载示例数据，默认格式为 Time/Id 列。"""
+    data = pd.read_csv(file_path)
 
-def normalize_signal(signal):
-    """将信号归一化到0-1范围"""
-    signal_min = np.min(signal)
-    signal_max = np.max(signal)
-    if signal_max - signal_min > 1e-10:
-        return (signal - signal_min) / (signal_max - signal_min)
-    else:
-        return np.zeros_like(signal)
+    if time_range is not None:
+        start_t, end_t = time_range
+        data = data[(data["Time"] >= start_t) & (data["Time"] <= end_t)]
 
-def load_example_data(file_path='../autotau/transient.csv', time_range=None):
-    """
-    加载示例数据
-    
-    参数:
-    -----
-    file_path : str
-        数据文件路径
-    time_range : tuple, optional
-        时间范围 (min, max)
-        
-    返回:
-    -----
-    tuple
-        (time_data, current_data)
-    """
-    try:
-        data = pd.read_csv(file_path)
-        
-        # 应用时间范围过滤（如果提供）
-        if time_range is not None:
-            min_time, max_time = time_range
-            data = data[(data['Time'] >= min_time) & (data['Time'] <= max_time)]
-            
-        time_data = data['Time'].values
-        current_data = -data['Id'].values  # 反相电流
-        
-        return time_data, current_data
-    except Exception as e:
-        print(f"加载数据时出错: {e}")
-        raise
+    if max_cycles is not None:
+        if period is None:
+            raise ValueError("max_cycles requires period to be provided")
+        start_time = data["Time"].iloc[0]
+        end_time = start_time + period * max_cycles
+        data = data[data["Time"] <= end_time]
+
+    time_data = data["Time"].to_numpy()
+    signal_data = (-data["Id"]).to_numpy()
+    return time_data, signal_data
+
+
+def infer_sample_step(time_data):
+    """从时间序列推断采样步长。"""
+    if len(time_data) < 2:
+        raise ValueError("time_data must contain at least two points")
+    return float(np.median(np.diff(time_data)))
+
+
+def format_value(value, digits=6):
+    """格式化数值输出，支持 None。"""
+    if value is None:
+        return "None"
+    return f"{value:.{digits}f}"
+
 
 def basic_tau_fitter_example():
-    """TauFitter基本使用示例"""
-    print("运行TauFitter基本示例...")
-    
-    # 加载数据
-    time_data, current_data = load_example_data(time_range=(0.2, 0.25))
-    
-    # 创建TauFitter对象
-    tau_fitter = TauFitter(
-        time_data, 
-        current_data, 
-        t_on_idx=[0.2, 0.21],  # 开启过程时间窗口
-        t_off_idx=[0.24, 0.25]  # 关闭过程时间窗口
+    """TauFitter 基本用法示例。"""
+    print("运行 TauFitter 示例...")
+
+    time_data, signal_data = load_example_data(time_range=(0.2, 0.25))
+
+    fitter = TauFitter(
+        time_data,
+        signal_data,
+        t_on_idx=[0.2, 0.21],
+        t_off_idx=[0.24, 0.25],
+        normalize=False,
+        language="en",
     )
-    
-    # 拟合并获取结果
-    tau_fitter.fit_tau_on()
-    tau_fitter.fit_tau_off()
-    
-    print(f"tau_on: {tau_fitter.get_tau_on():.6f} s")
-    print(f"R²_on: {tau_fitter.get_r_squared_on():.4f}")
-    
-    print(f"tau_off: {tau_fitter.get_tau_off():.6f} s")
-    print(f"R²_off: {tau_fitter.get_r_squared_off():.4f}")
-    
-    # 可视化结果
-    tau_fitter.plot_tau_on()
-    tau_fitter.plot_tau_off()
-    
-    return tau_fitter
+
+    fitter.fit_tau_on(interp=True, points_after_interp=200)
+    fitter.fit_tau_off(interp=True, points_after_interp=200)
+
+    print(f"tau_on: {format_value(fitter.get_tau_on())} s")
+    print(f"tau_off: {format_value(fitter.get_tau_off())} s")
+    print(
+        "R2_on:",
+        format_value(fitter.tau_on_r_squared, digits=4),
+        "R2_adj_on:",
+        format_value(fitter.tau_on_r_squared_adj, digits=4),
+    )
+    print(
+        "R2_off:",
+        format_value(fitter.tau_off_r_squared, digits=4),
+        "R2_adj_off:",
+        format_value(fitter.tau_off_r_squared_adj, digits=4),
+    )
+
+    # 可视化
+    fitter.plot_tau_on()
+    fitter.plot_tau_off()
+
 
 def auto_tau_fitter_example():
-    """AutoTauFitter示例"""
-    print("运行AutoTauFitter示例...")
-    
-    # 加载数据
-    time_data, current_data = load_example_data(time_range=(0.2, 0.4))
-    
-    # 自动寻找最佳拟合窗口
+    """AutoTauFitter 自动窗口搜索示例。"""
+    print("运行 AutoTauFitter 示例...")
+
+    time_data, signal_data = load_example_data(time_range=(0.2, 0.4))
+    sample_step = infer_sample_step(time_data)
+    period = 0.2
+
     auto_fitter = AutoTauFitter(
-        time_data, 
-        current_data,
-        sample_step=0.001,
-        period=0.2,
+        time_data,
+        signal_data,
+        sample_step=sample_step,
+        period=period,
         window_scalar_min=0.2,
-        window_scalar_max=1/3,
-        window_points_step=5,
-        window_start_idx_step=2,
+        window_scalar_max=1 / 3,
+        window_points_step=10,
+        window_start_idx_step=1,
         normalize=False,
-        language='en',
-        show_progress=True
+        language="en",
+        show_progress=True,
     )
-    
-    print("拟合开启和关闭过程...")
+
     auto_fitter.fit_tau_on_and_off()
-    
-    # 获取结果
-    print(f"最佳tau_on: {auto_fitter.best_tau_on_fitter.get_tau_on():.6f} s")
-    print(f"最佳R²_on: {auto_fitter.best_tau_on_fitter.get_r_squared_on():.4f}")
-    
-    print(f"最佳tau_off: {auto_fitter.best_tau_off_fitter.get_tau_off():.6f} s")
-    print(f"最佳R²_off: {auto_fitter.best_tau_off_fitter.get_r_squared_off():.4f}")
-    
-    # 可视化结果
-    auto_fitter.best_tau_on_fitter.plot_tau_on()
-    auto_fitter.best_tau_off_fitter.plot_tau_off()
-    
-    return auto_fitter
+
+    if auto_fitter.best_tau_on_fitter is not None:
+        print(f"best tau_on: {format_value(auto_fitter.best_tau_on_fitter.get_tau_on())} s")
+        auto_fitter.best_tau_on_fitter.plot_tau_on()
+    if auto_fitter.best_tau_off_fitter is not None:
+        print(f"best tau_off: {format_value(auto_fitter.best_tau_off_fitter.get_tau_off())} s")
+        auto_fitter.best_tau_off_fitter.plot_tau_off()
+    print(
+        "on window:",
+        auto_fitter.best_tau_on_window_start_time,
+        auto_fitter.best_tau_on_window_end_time,
+    )
+
 
 def cycles_auto_tau_fitter_example():
-    """CyclesAutoTauFitter示例"""
-    print("运行CyclesAutoTauFitter示例...")
-    
-    # 加载数据
-    time_data, current_data = load_example_data()
-    
-    # 处理多周期数据
+    """CyclesAutoTauFitter 多周期拟合示例。"""
+    print("运行 CyclesAutoTauFitter 示例...")
+
+    period = 0.2
+    sample_rate = 1000
+    time_data, signal_data = load_example_data(max_cycles=5, period=period)
+
     cycles_fitter = CyclesAutoTauFitter(
         time_data,
-        current_data,
-        period=0.2,
-        sample_rate=1000,
+        signal_data,
+        period=period,
+        sample_rate=sample_rate,
         window_scalar_min=0.2,
-        window_scalar_max=1/3,
-        window_points_step=5,
-        window_start_idx_step=2,
+        window_scalar_max=1 / 3,
+        window_points_step=10,
+        window_start_idx_step=1,
         normalize=False,
-        language='en',
-        show_progress=True
+        language="en",
     )
-    
-    print("拟合所有周期...")
-    cycles_fitter.fit_all_cycles()
-    
-    # 可视化结果
+
+    cycles_fitter.fit_all_cycles(r_squared_threshold=0.95)
+
+    summary = cycles_fitter.get_summary_data()
+    if summary is not None:
+        print("结果摘要:")
+        print(summary.head())
+
     cycles_fitter.plot_cycle_results()
     cycles_fitter.plot_windows_on_signal(num_cycles=3)
     cycles_fitter.plot_all_fits(num_cycles=2)
-    
-    # 获取结果摘要
-    summary = cycles_fitter.get_summary_data()
-    print("\n结果摘要:")
-    print(summary)
-    
-    return cycles_fitter
+
 
 def parallel_example():
-    """并行处理示例"""
-    print("运行并行处理示例...")
-    
-    # 加载数据
-    time_data, current_data = load_example_data()
-    
-    # 串行版多周期拟合器
-    print("创建串行版多周期拟合器...")
+    """串行 vs 并行多周期拟合示例（手动窗口）。"""
+    print("运行 并行处理对比示例...")
+
+    period = 0.2
+    sample_rate = 1000
+    time_data, signal_data = load_example_data(max_cycles=6, period=period)
+
+    # 先用前两个周期搜索窗口
+    two_period_mask = time_data <= time_data[0] + 2 * period
+    time_subset = time_data[two_period_mask]
+    signal_subset = signal_data[two_period_mask]
+
+    finder = WindowFinder(
+        time_subset,
+        signal_subset,
+        sample_step=1 / sample_rate,
+        period=period,
+        window_scalar_min=0.2,
+        window_scalar_max=1 / 3,
+        window_points_step=10,
+        window_start_idx_step=1,
+        normalize=False,
+        language="en",
+        show_progress=True,
+        max_workers=4,
+    )
+    windows = finder.find_best_windows()
+
+    window_on_offset = windows["on"]["offset"] % period
+    window_off_offset = windows["off"]["offset"] % period
+    window_on_size = windows["on"]["size"]
+    window_off_size = windows["off"]["size"]
+
+    # 串行拟合
     serial_start = time.time()
-    
-    serial_cycles_fitter = CyclesAutoTauFitter(
+    serial_fitter = CyclesTauFitter(
         time_data,
-        current_data,
-        period=0.2,
-        sample_rate=1000,
-        window_scalar_min=0.2,
-        window_scalar_max=1/3,
-        window_points_step=10,
-        window_start_idx_step=2,
+        signal_data,
+        period=period,
+        sample_rate=sample_rate,
+        window_on_offset=window_on_offset,
+        window_on_size=window_on_size,
+        window_off_offset=window_off_offset,
+        window_off_size=window_off_size,
         normalize=False,
-        language='en',
-        show_progress=True,
-        max_cycles=5  # 仅处理前5个周期以加快示例运行速度
+        language="en",
     )
-    
-    serial_cycles_fitter.fit_all_cycles()
-    serial_end = time.time()
-    serial_time = serial_end - serial_start
-    
-    # 并行版多周期拟合器
-    print("\n创建并行版多周期拟合器...")
+    serial_fitter.fit_all_cycles()
+    serial_time = time.time() - serial_start
+
+    # 并行拟合
     parallel_start = time.time()
-    
-    parallel_cycles_fitter = ParallelCyclesAutoTauFitter(
+    parallel_fitter = ParallelCyclesTauFitter(
         time_data,
-        current_data,
-        period=0.2,
-        sample_rate=1000,
-        window_scalar_min=0.2,
-        window_scalar_max=1/3,
-        window_points_step=10,
-        window_start_idx_step=2,
+        signal_data,
+        period=period,
+        sample_rate=sample_rate,
+        window_on_offset=window_on_offset,
+        window_on_size=window_on_size,
+        window_off_offset=window_off_offset,
+        window_off_size=window_off_size,
         normalize=False,
-        language='en',
+        language="en",
         show_progress=True,
-        max_cycles=5,  # 仅处理前5个周期以加快示例运行速度
-        max_workers=None  # 使用所有可用CPU核心
+        max_workers=4,
     )
-    
-    parallel_cycles_fitter.fit_all_cycles()
-    parallel_end = time.time()
-    parallel_time = parallel_end - parallel_start
-    
-    # 比较性能
-    print("\n性能比较:")
-    print(f"串行处理时间: {serial_time:.2f} 秒")
-    print(f"并行处理时间: {parallel_time:.2f} 秒")
-    print(f"加速比: {serial_time/parallel_time:.2f}x")
-    
-    return serial_cycles_fitter, parallel_cycles_fitter
+    parallel_fitter.fit_all_cycles()
+    parallel_time = time.time() - parallel_start
+
+    print(f"串行处理时间: {serial_time:.2f} s")
+    print(f"并行处理时间: {parallel_time:.2f} s")
+    if parallel_time > 0:
+        print(f"加速比: {serial_time / parallel_time:.2f}x")
+
 
 def compare_performance():
-    """性能比较函数"""
-    return parallel_example()
+    """性能比较入口。"""
+    parallel_example()
+
 
 if __name__ == "__main__":
-    print("AutoTau示例程序")
+    print("AutoTau 示例程序")
     print("=" * 50)
-    
-    # 运行基本示例
+
     basic_tau_fitter_example()
-    
-    # 运行自动拟合示例
     auto_tau_fitter_example()
-    
-    # 运行多周期示例
     cycles_auto_tau_fitter_example()
-    
-    # 运行并行处理性能比较
-    compare_performance() 
+    compare_performance()
