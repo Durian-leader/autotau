@@ -225,6 +225,13 @@ autotau-gui
 
 ## 更新日志
 
+### v0.6.0
+
+- **GUI 完全解耦**：GUI 现在使用独立的拟合模块，不再依赖 core 模块的实现
+- **修复 GUI 卡死问题**：使用正确的 QThread 信号机制，确保拟合操作真正在后台线程执行
+- 新增 `autotau.gui.fitters` 模块：包含 `ExponentialFitter`、`WindowSearcher`、`CyclesFitter`、`AutoCyclesFitter`
+- 避免 multiprocessing 和 matplotlib 与 GUI 的冲突
+
 ### v0.5.0
 
 - 新增 PyQt5 图形界面（GUI）
