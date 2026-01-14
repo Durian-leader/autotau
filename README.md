@@ -1,45 +1,47 @@
 # AutoTau
 
-AutoTau 是一个用于拟合指数上升/下降过程时间常数 τ 的 Python 工具，面向瞬态或周期信号的 τ 提取与分析。
+[中文文档](README_CN.md) | English
 
-模型形式：
-- 上升（turn-on）：`y = A * (1 - exp(-t/τ)) + C`
-- 下降（turn-off）：`y = A * exp(-t/τ) + C`
+AutoTau is a Python tool for fitting time constants (τ) in exponential rise/decay processes, designed for transient and periodic signal analysis.
 
-## 主要功能
+**Models:**
+- Turn-on (rise): `y = A * (1 - exp(-t/τ)) + C`
+- Turn-off (decay): `y = A * exp(-t/τ) + C`
 
-- 指定窗口的 τ 拟合（`TauFitter`），输出 τ、R²、调整后 R²，并支持绘图。
-- 滑动窗口自动搜索最佳拟合区间（`AutoTauFitter`），可选并行执行。
-- 多周期自动拟合（`CyclesAutoTauFitter`），自动从前两个周期推断窗口并应用到全部周期。
-- 窗口搜索与拟合解耦：`WindowFinder` 只找窗口；`CyclesTauFitter`/`ParallelCyclesTauFitter` 使用手动窗口拟合。
-- 多进程并行周期拟合（`ParallelCyclesTauFitter`），默认返回 `pandas.DataFrame`。
-- **PyQt5 图形界面**（v0.5.0 新增）：支持从 Excel 粘贴数据、自动/手动拟合、可视化结果、导出 CSV/Excel。
+## Features
 
-## 安装
+- Single-window τ fitting with R² and adjusted R² metrics
+- Automatic sliding window search for optimal fit regions
+- Multi-cycle batch fitting (serial and parallel)
+- Decoupled workflow: separate window search from fitting
+- PyQt5 GUI for interactive analysis
+- Bilingual support (Chinese/English)
+
+## Installation
 
 ```bash
 pip install autotau
 ```
 
-安装 GUI 版本（包含 PyQt5）：
+With GUI support:
 
 ```bash
 pip install autotau[gui]
 ```
 
-本地开发安装：
+Local development:
 
 ```bash
 pip install -e .
-# 或带 GUI
+# or with GUI
 pip install -e ".[gui]"
 ```
 
-Python 版本要求：`>=3.6`。
+**Python version:** >=3.6
 
-## 快速开始
+## Quick Start
 
-### 1) 单窗口拟合（TauFitter）
+### 1) Single Window Fitting (TauFitter)
 
 ```python
 import numpy as np
@@ -69,9 +71,7 @@ print("tau_off:", fitter.get_tau_off())
 print("R2_on:", fitter.tau_on_r_squared, "R2_adj_on:", fitter.tau_on_r_squared_adj)
 ```
 
-### 2) 自动窗口搜索（AutoTauFitter）
-
-假设已有 `time`、`signal`（同采样、按时间升序），且包含一个完整周期。
+### 2) Auto Window Search (AutoTauFitter)
 
 ```python
 from autotau import AutoTauFitter
@@ -97,9 +97,7 @@ print("best tau_off:", auto_fitter.best_tau_off_fitter.get_tau_off())
 print("on window:", auto_fitter.best_tau_on_window_start_time, auto_fitter.best_tau_on_window_end_time)
 ```
 
-### 3) 多周期自动拟合（CyclesAutoTauFitter）
-
-假设 `time`、`signal` 为多周期数据，`period` 为单周期长度。
+### 3) Multi-Cycle Auto Fitting (CyclesAutoTauFitter)
 
 ```python
 from autotau import CyclesAutoTauFitter
@@ -125,13 +123,14 @@ summary = cycles_fitter.get_summary_data()
 print(summary.head())
 ```
 
-### 4) 手动窗口 + 并行多周期拟合
+### 4) Decoupled Workflow (WindowFinder + ParallelCyclesTauFitter)
 
-先在前两个周期搜索窗口，再并行拟合全部周期。
+For maximum flexibility, separate window search from fitting:
 
 ```python
 from autotau import WindowFinder, ParallelCyclesTauFitter
 
+# Step 1: Find best windows using first 2 cycles
 two_period_mask = time <= time[0] + 2 * period
 time_subset = time[two_period_mask]
 signal_subset = signal[two_period_mask]
@@ -148,6 +147,11 @@ finder = WindowFinder(
 )
 windows = finder.find_best_windows()
 
+print("On window offset:", windows['on']['offset'])
+print("On window size:", windows['on']['size'])
+print("On window R²:", windows['on']['r_squared'])
+
+# Step 2: Apply windows to all cycles (parallel)
 fitter = ParallelCyclesTauFitter(
     time,
     signal,
@@ -161,87 +165,209 @@ fitter = ParallelCyclesTauFitter(
     max_workers=4,
 )
 
-df = fitter.fit_all_cycles()  # 默认返回 DataFrame
+df = fitter.fit_all_cycles()  # Returns DataFrame by default
+summary = fitter.get_summary_data()
+fitter.plot_cycle_results()
 ```
 
-## 并行使用建议
+## API Overview
 
-- `AutoTauFitter` 可通过注入 `executor` 并行化窗口搜索：
-  ```python
-  from concurrent.futures import ProcessPoolExecutor
-  from autotau import AutoTauFitter
+| Class | Purpose | Use When |
+|-------|---------|----------|
+| `TauFitter` | Single window τ fitting | You know the exact fit window |
+| `AutoTauFitter` | Auto window search + fitting | Single cycle, find best window automatically |
+| `WindowFinder` | Window search only (no fitting) | Reuse windows across multiple datasets |
+| `CyclesTauFitter` | Multi-cycle, manual windows (serial) | Few cycles (<10), known windows |
+| `ParallelCyclesTauFitter` | Multi-cycle, manual windows (parallel) | Many cycles (>=10), known windows |
+| `CyclesAutoTauFitter` | Multi-cycle, auto windows | Many cycles, unknown windows |
+| `ParallelAutoTauFitter` | *(Deprecated)* | Use `AutoTauFitter(..., executor=...)` |
+| `ParallelCyclesAutoTauFitter` | *(Deprecated)* | Use `CyclesAutoTauFitter(..., fitter_factory=...)` |
 
-  with ProcessPoolExecutor(max_workers=8) as executor:
-      fitter = AutoTauFitter(time, signal, sample_step=..., period=..., executor=executor)
-      fitter.fit_tau_on_and_off()
-  ```
-- `CyclesAutoTauFitter` 可通过 `fitter_factory` 传入自定义 `AutoTauFitter`（例如带并行的版本）。
-- `ParallelCyclesTauFitter` 已内置多进程“分块并行”，适合周期数较多的场景。
-- Windows 下使用多进程时，请将并行入口放在 `if __name__ == "__main__":` 中。
+## Parallel Processing
 
-## API 概览
+### AutoTauFitter with Executor
 
-- `TauFitter`：指定窗口拟合 τ，输出拟合参数与 R²。
-- `AutoTauFitter`：滑动窗口搜索最佳拟合区间（可选并行）。
-- `CyclesAutoTauFitter`：多周期自动拟合，支持低 R² 周期的再拟合。
-- `WindowFinder`：只搜索窗口，不做拟合。
-- `CyclesTauFitter`：使用手动窗口拟合多个周期（串行）。
-- `ParallelCyclesTauFitter`：使用手动窗口拟合多个周期（并行，默认返回 DataFrame）。
-- `ParallelAutoTauFitter` / `ParallelCyclesAutoTauFitter`：保留兼容但已废弃，建议改用 `AutoTauFitter(..., executor=...)` 与 `CyclesAutoTauFitter(..., fitter_factory=...)`。
+```python
+from concurrent.futures import ProcessPoolExecutor
+from autotau import AutoTauFitter
 
-## 图形界面（GUI）
+with ProcessPoolExecutor(max_workers=8) as executor:
+    fitter = AutoTauFitter(time, signal, sample_step=..., period=..., executor=executor)
+    fitter.fit_tau_on_and_off()
+```
 
-v0.5.0 新增 PyQt5 图形界面，支持：
+### CyclesAutoTauFitter with Custom Factory
 
-- 从 Excel 复制粘贴两列数据（时间、信号）
-- 自动模式：自动搜索最佳拟合窗口
-- 手动模式：手动指定窗口参数
-- 可视化：原始数据、τ 演化图、R² 质量图
-- 导出结果到 CSV/Excel
+```python
+from autotau import CyclesAutoTauFitter
 
-### 启动 GUI
+def custom_fitter_factory(time, signal, **kwargs):
+    from concurrent.futures import ProcessPoolExecutor
+    with ProcessPoolExecutor(max_workers=4) as executor:
+        return AutoTauFitter(time, signal, executor=executor, **kwargs)
+
+cycles_fitter = CyclesAutoTauFitter(
+    time, signal, period=0.4, sample_rate=1000,
+    fitter_factory=custom_fitter_factory
+)
+```
+
+### Performance Recommendations
+
+| Scenario | Recommended Class |
+|----------|-------------------|
+| Cycles < 10 | `CyclesTauFitter` (avoid multiprocessing overhead) |
+| Cycles >= 10 | `ParallelCyclesTauFitter` (significant speedup) |
+| Windows unknown | `CyclesAutoTauFitter` or `WindowFinder` + `ParallelCyclesTauFitter` |
+
+**Note:** On Windows, wrap parallel code in `if __name__ == "__main__":` block.
+
+## Advanced Workflows
+
+### Exploring Different Window Parameters
+
+Find optimal windows, then experiment with variations:
+
+```python
+from autotau import WindowFinder, ParallelCyclesTauFitter
+
+# Find initial best windows
+finder = WindowFinder(time_subset, signal_subset, sample_step=0.001, period=period)
+windows = finder.find_best_windows()
+
+# Fit with original windows
+fitter1 = ParallelCyclesTauFitter(
+    time, signal, period, sample_rate,
+    window_on_offset=windows['on']['offset'],
+    window_on_size=windows['on']['size'],
+    window_off_offset=windows['off']['offset'],
+    window_off_size=windows['off']['size']
+)
+results1 = fitter1.fit_all_cycles()
+summary1 = fitter1.get_summary_data()
+
+# Experiment with adjusted parameters
+fitter2 = ParallelCyclesTauFitter(
+    time, signal, period, sample_rate,
+    window_on_offset=windows['on']['offset'] + 0.1,  # Shift +0.1s
+    window_on_size=windows['on']['size'] * 1.1,      # Enlarge 10%
+    window_off_offset=windows['off']['offset'],
+    window_off_size=windows['off']['size']
+)
+results2 = fitter2.fit_all_cycles()
+summary2 = fitter2.get_summary_data()
+
+# Compare
+print("Original average R²:", summary1['r_squared_on'].mean())
+print("Adjusted average R²:", summary2['r_squared_on'].mean())
+```
+
+## GUI Usage
+
+v0.6.0 includes a PyQt5 GUI with decoupled architecture (avoids multiprocessing/matplotlib conflicts).
+
+### Launch
 
 ```bash
-# 方式 1：模块启动
+# Module launch
 python -m autotau.gui
 
-# 方式 2：命令行（安装后）
+# Command line (after installation)
 autotau-gui
 ```
 
-### 使用流程
+### Workflow
 
-1. 从 Excel 复制两列数据（时间 + 信号）
-2. 点击"Parse Clipboard"解析数据
-3. 设置周期（Period）和采样率（Sample Rate）
-4. 选择拟合模式（Auto/Manual）
-5. 点击"Fit Data"开始拟合
-6. 查看结果图表，导出 CSV/Excel
+1. Copy two-column data from Excel (Time + Signal)
+2. Click "Parse Clipboard"
+3. Set Period and Sample Rate
+4. Select mode (Auto/Manual)
+5. Click "Fit Data"
+6. View results, export to CSV/Excel
 
-## 示例与数据
+### GUI Features
 
-- 示例脚本：`examples/basic_examples.py`
-- 示例数据：`autotau/transient.csv`
+- Auto mode: Automatic window search
+- Manual mode: Specify window parameters
+- Visualization: Original data, τ evolution, R² quality
+- Export: CSV/Excel output
 
-## 更新日志
+## API Parameters
+
+### WindowFinder
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `time` | Time array | Required |
+| `signal` | Signal array | Required |
+| `sample_step` | Sampling step (seconds) | Required |
+| `period` | Signal period (seconds) | Required |
+| `window_scalar_min` | Minimum window size ratio | 1/5 |
+| `window_scalar_max` | Maximum window size ratio | 1/3 |
+| `show_progress` | Show progress bar | False |
+| `max_workers` | Max worker processes | CPU count |
+
+**Methods:**
+- `find_best_windows()` - Returns dict with 'on' and 'off' window parameters
+- `get_window_params()` - Get window parameters
+
+### CyclesTauFitter / ParallelCyclesTauFitter
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `time` | Time array | Required |
+| `signal` | Signal array | Required |
+| `period` | Signal period (seconds) | Required |
+| `sample_rate` | Sampling rate (Hz) | Required |
+| `window_on_offset` | On window offset (seconds) | Required |
+| `window_on_size` | On window size (seconds) | Required |
+| `window_off_offset` | Off window offset (seconds) | Required |
+| `window_off_size` | Off window size (seconds) | Required |
+| `normalize` | Normalize signal | False |
+| `language` | 'cn' or 'en' | 'en' |
+| `show_progress` | Show progress (Parallel only) | False |
+| `max_workers` | Worker processes (Parallel only) | CPU count |
+
+**Methods:**
+- `fit_all_cycles()` - Returns DataFrame (default) or list of records
+- `get_summary_data()` - Get summary statistics
+- `plot_cycle_results()` - Plot τ evolution
+- `plot_r_squared_values()` - Plot R² quality
+- `plot_windows_on_signal()` - Visualize windows on signal
+- `plot_all_fits()` - Plot all fitting curves
+
+## Important Notes
+
+1. **WindowFinder** should use first 1-2 cycles of data for window search
+2. Parallel processing may not improve performance with few cycles
+3. Window offset is relative to each cycle's start time
+4. Ensure window parameters don't exceed cycle boundaries
+5. `ParallelCyclesTauFitter` uses chunked parallelism (each process handles a group of cycles) for efficiency
+
+## Examples & Data
+
+- Example script: `examples/basic_examples.py`
+- Sample data: `autotau/transient.csv`
+
+## Changelog
 
 ### v0.6.0
 
-- **GUI 完全解耦**：GUI 现在使用独立的拟合模块，不再依赖 core 模块的实现
-- **修复 GUI 卡死问题**：使用正确的 QThread 信号机制，确保拟合操作真正在后台线程执行
-- 新增 `autotau.gui.fitters` 模块：包含 `ExponentialFitter`、`WindowSearcher`、`CyclesFitter`、`AutoCyclesFitter`
-- 避免 multiprocessing 和 matplotlib 与 GUI 的冲突
+- **GUI fully decoupled**: GUI now uses independent fitting module, no longer depends on core implementation
+- **Fixed GUI freezing**: Uses correct QThread signal mechanism for background fitting
+- New `autotau.gui.fitters` module: `ExponentialFitter`, `WindowSearcher`, `CyclesFitter`, `AutoCyclesFitter`
+- Avoids multiprocessing and matplotlib conflicts with GUI
 
 ### v0.5.0
 
-- 新增 PyQt5 图形界面（GUI）
-- 支持从 Excel 粘贴数据、自动/手动拟合、可视化、导出
+- Added PyQt5 GUI
+- Support clipboard paste, auto/manual fitting, visualization, export
 
 ### v0.4.5
 
-- 优化分块并行策略
-- 修复窗口偏移量计算问题
+- Optimized chunked parallel strategy
+- Fixed window offset calculation
 
-## 许可证
+## License
 
-MIT License，见 `LICENSE`。
+MIT License, see `LICENSE`.

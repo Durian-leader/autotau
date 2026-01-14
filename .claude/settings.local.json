@@ -15,7 +15,9 @@
       "Bash(pip install:*)",
       "Bash(twine upload:*)",
       "Bash(conda run:*)",
-      "Bash(git push)"
+      "Bash(git push)",
+      "Bash(tree:*)",
+      "Bash(wc:*)"
     ],
     "deny": [],
     "ask": []
